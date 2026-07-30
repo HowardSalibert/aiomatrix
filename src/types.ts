@@ -55,6 +55,34 @@ export interface Context {
   react(key: string): Promise<string>;
 }
 
+/**
+ * Bot-side OlmMachine EncryptionSettings for megolm key sharing.
+ * These are NOT Synapse server settings — they control how this bot's
+ * CryptoEngine calls `shareRoomKey`.
+ */
+export type EncryptionSharePolicy = {
+  /** Default false for bots — share megolm with unverified devices. */
+  onlyAllowTrustedDevices?: boolean;
+  /** Default false — don't fail share on verified-user/unverified-device problems. */
+  errorOnVerifiedUserProblem?: boolean;
+};
+
+/** Structured crypto lifecycle events for bot authors (withheld keys, peers, encrypt). */
+export type CryptoLogEvent =
+  | {
+      type: "share_room_key";
+      roomId: string;
+      keyShares: number;
+      withheld: number;
+      peers: string[];
+      policy: Required<EncryptionSharePolicy>;
+    }
+  | { type: "withheld_detail"; roomId: string; eventType: string; bodyPreview: string }
+  | { type: "peer_keys_missing"; roomId: string; peers: string[] }
+  | { type: "encrypt_send"; roomId: string; eventType: string }
+  | { type: "warn"; message: string; detail?: unknown }
+  | { type: "error"; message: string; detail?: unknown };
+
 export interface BotCreateOptions {
   homeserverUrl: string;
   accessToken: string;
@@ -63,6 +91,13 @@ export interface BotCreateOptions {
   storagePath?: string;
   /** Default true. When true, Rust crypto (OlmMachine) is initialized and E2EE contract enforced. */
   crypto?: boolean;
+  /**
+   * Megolm share policy for OlmMachine EncryptionSettings (bot client, not Synapse).
+   * Defaults: onlyAllowTrustedDevices=false, errorOnVerifiedUserProblem=false.
+   */
+  encryption?: EncryptionSharePolicy;
+  /** Optional hook for rich crypto diagnostics (withheld keys, peer gaps, encrypt). */
+  onCryptoLog?: (event: CryptoLogEvent) => void;
   /** Auto-join invited rooms. Default true. */
   autojoin?: boolean;
   /** Passphrase for OlmMachine SQLite store. Empty → warn once (unencrypted store). */

@@ -553,6 +553,8 @@ export async function createMatrixClient(
       storePath: cryptoPath,
       http,
       storePassphrase: options.cryptoStorePassphrase ?? null,
+      encryption: options.encryption,
+      onCryptoLog: options.onCryptoLog,
     });
     savePersistedDeviceId(storagePath, deviceId);
   } else if (deviceId) {

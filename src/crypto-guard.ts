@@ -135,9 +135,16 @@ export async function assertPeersHaveKeys(
     total += countDevicesForUser(resp, peer);
   }
   if (total === 0) {
-    console.error(
-      `[matrixbots] PeerKeysMissingError: encrypted room ${roomId} — keys/query returned 0 device keys for peers: ${peers.join(", ")}. Message NOT sent.`,
-    );
+    client.crypto?.emitCryptoLog({
+      type: "peer_keys_missing",
+      roomId,
+      peers,
+    });
+    if (!client.crypto) {
+      console.error(
+        `[matrixbots] PeerKeysMissingError: encrypted room ${roomId} — keys/query returned 0 device keys for peers: ${peers.join(", ")}. Message NOT sent.`,
+      );
+    }
     throw new PeerKeysMissingError(roomId, peers);
   }
 }

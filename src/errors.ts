@@ -1,3 +1,5 @@
+import type { EncryptionSharePolicy } from "./types.js";
+
 /** Base error for matrixbots SDK. */
 export class MatrixBotsError extends Error {
   constructor(message: string) {
@@ -50,6 +52,25 @@ export class EncryptedRoomWithoutCryptoError extends MatrixBotsError {
   constructor(roomId: string) {
     super(
       `Room ${roomId} is encrypted but bot crypto is disabled. Refusing plaintext fallback.`,
+    );
+  }
+}
+
+/**
+ * shareRoomKey produced only m.room_key.withheld (zero actual key shares).
+ * New outbound Megolm sessions would be undecryptable by peers.
+ */
+export class RoomKeyWithheldError extends MatrixBotsError {
+  constructor(
+    public readonly roomId: string,
+    public readonly withheld: number,
+    public readonly policy: Required<EncryptionSharePolicy>,
+  ) {
+    super(
+      `RoomKeyWithheldError: room ${roomId}: 0 key shares, ${withheld} withheld ` +
+        `(onlyAllowTrustedDevices=${policy.onlyAllowTrustedDevices}, ` +
+        `errorOnVerifiedUserProblem=${policy.errorOnVerifiedUserProblem}). ` +
+        `Peers will not decrypt — check onCryptoLog withheld_detail / device trust.`,
     );
   }
 }

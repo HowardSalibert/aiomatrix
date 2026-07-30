@@ -28,7 +28,7 @@ Status: **v0.2.0** — hardened sync/E2EE/HTTP (see [AUDIT.md](./AUDIT.md)). **N
 
 1. With `crypto: true` (default): init OlmMachine under `storagePath/crypto`, `prepareCrypto` (flush outgoing), verify **own** device keys via `keys/query` (5 attempts, backoff 300–2400ms). Missing → `CryptoNotReadyError`.
 2. Config `deviceId` (or `storagePath/device.json`) must match crypto device after prepare → else `DeviceMismatchError`. Whoami without `device_id` does not fail before prepare.
-3. Before send into an encrypted room: `keys/query` joined human peers; zero device keys → `PeerKeysMissingError`, **do not send**. Then claim sessions, `shareRoomKey` (room `history_visibility`), encrypt as `m.room.encrypted`.
+3. Before send into an encrypted room: `keys/query` joined human peers; zero device keys → `PeerKeysMissingError`, **do not send**. Then claim sessions, `shareRoomKey` with configurable bot `encryption` policy (room `history_visibility`), encrypt as `m.room.encrypted`. All withheld / zero-share → `RoomKeyWithheldError` (see [E2EE share policy](#e2ee-share-policy)).
 4. Never plaintext-fallback in encrypted rooms. Reactions use the same `sendEvent` encrypt path.
 5. Cold sync: filter `timeline.limit: 0` + skip handler dispatch on bootstrap; `bootstrap_done` in `sync.json`.
 6. `bot.cryptoReady: boolean` after successful verification.
@@ -100,9 +100,72 @@ dp.include(router);
 await bot.start(dp);
 ```
 
+## E2EE share policy
+
+These settings are **bot/client `EncryptionSettings`** passed into OlmMachine `shareRoomKey`. They are **not** Synapse homeserver config (`encryption` section / room state). Changing them only affects how *this* bot shares megolm session keys with peer devices.
+
+### Defaults (bots)
+
+| Option | Default | Meaning |
+|---|---|---|
+| `onlyAllowTrustedDevices` | `false` | Share megolm with unverified human devices (normal for bots). |
+| `errorOnVerifiedUserProblem` | `false` | Do not fail the share when a verified user has an unverified device. |
+
+If you leave the Rust/SDK defaults (`onlyAllowTrustedDevices: true`), peers often get `m.room_key.withheld` instead of a key — ciphertext they cannot decrypt until a later share (feels like “bot replies on my next message”).
+
+### Tighten for verified-only communities
+
+```ts
+const bot = await Bot.create({
+  homeserverUrl: process.env.MATRIX_HS_URL!,
+  accessToken: process.env.MATRIX_ACCESS_TOKEN!,
+  deviceId: process.env.MATRIX_DEVICE_ID!,
+  encryption: {
+    onlyAllowTrustedDevices: true,
+    errorOnVerifiedUserProblem: true,
+  },
+});
+```
+
+### Crypto logs (`onCryptoLog`)
+
+When keys are withheld or peers cannot decrypt, matrixbots emits structured events (and mirrors important ones to `console`):
+
+```ts
+import type { CryptoLogEvent } from 'matrixbots';
+
+const bot = await Bot.create({
+  // ...
+  onCryptoLog: (event: CryptoLogEvent) => {
+    // share_room_key | withheld_detail | peer_keys_missing | encrypt_send | warn | error
+    console.log('[crypto]', event);
+  },
+});
+```
+
+- `withheld_detail` — truncated to-device body (max 500 chars) so you see withheld codes / user ids.
+- `share_room_key` — `keyShares` vs `withheld` counts + resolved policy.
+- If `keyShares === 0` and `withheld > 0` → throws `RoomKeyWithheldError` (sending a new session would be useless). If some keys were shared, withheld ghost devices only produce a warn.
+
 ## Commands
 
 `Command('echo')` matches `/echo`, `!echo`, and in DMs also bare `echo` as the first token. Args land in `ctx.commandArgs`.
+
+### Command specs for host autocomplete
+
+Interactive Tab / slash UI is the **host client's** job. matrixbots can export specs for hosts to wire into autocomplete:
+
+```ts
+import { defineCommands, matchCommand } from 'matrixbots';
+
+const commands = defineCommands([
+  { name: 'echo', aliases: ['say'], description: 'Repeat text', args: '<text>' },
+  { name: 'help', description: 'List commands' },
+]);
+
+const hit = matchCommand('/echo hi', commands);
+// → { spec: commands[0], args: 'hi' }
+```
 
 ## License
 

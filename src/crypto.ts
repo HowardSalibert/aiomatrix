@@ -17,7 +17,30 @@ import {
   ToDeviceRequest,
   UserId,
 } from "@matrix-org/matrix-sdk-crypto-nodejs";
+import { RoomKeyWithheldError } from "./errors.js";
 import type { MatrixHttp } from "./http.js";
+import type {
+  CryptoLogEvent,
+  EncryptionSharePolicy,
+} from "./types.js";
+
+export const DEFAULT_ENCRYPTION_SHARE_POLICY: Required<EncryptionSharePolicy> = {
+  onlyAllowTrustedDevices: false,
+  errorOnVerifiedUserProblem: false,
+};
+
+export function resolveEncryptionSharePolicy(
+  policy?: EncryptionSharePolicy | null,
+): Required<EncryptionSharePolicy> {
+  return {
+    onlyAllowTrustedDevices:
+      policy?.onlyAllowTrustedDevices ??
+      DEFAULT_ENCRYPTION_SHARE_POLICY.onlyAllowTrustedDevices,
+    errorOnVerifiedUserProblem:
+      policy?.errorOnVerifiedUserProblem ??
+      DEFAULT_ENCRYPTION_SHARE_POLICY.errorOnVerifiedUserProblem,
+  };
+}
 
 export interface CryptoEngineCreateOptions {
   userId: string;
@@ -26,6 +49,17 @@ export interface CryptoEngineCreateOptions {
   http: MatrixHttp;
   /** Optional passphrase for encrypting the crypto store on disk. */
   storePassphrase?: string | null;
+  /** Megolm share policy (OlmMachine EncryptionSettings). */
+  encryption?: EncryptionSharePolicy;
+  /** Optional structured crypto logger. */
+  onCryptoLog?: (event: CryptoLogEvent) => void;
+}
+
+const WITHHELD_BODY_MAX = 500;
+
+function truncateBodyPreview(body: string, max = WITHHELD_BODY_MAX): string {
+  if (body.length <= max) return body;
+  return `${body.slice(0, max)}…`;
 }
 
 type OutgoingRequest =
@@ -92,8 +126,10 @@ export function normalizeToDeviceBody(parsed: unknown): { messages: unknown } {
 export class CryptoEngine {
   readonly userId: string;
   readonly clientDeviceId: string;
+  readonly sharePolicy: Required<EncryptionSharePolicy>;
   private readonly http: MatrixHttp;
   private readonly machine: OlmMachine;
+  private readonly onCryptoLog: ((event: CryptoLogEvent) => void) | null;
   private _isReady = false;
   private chain: Promise<unknown> = Promise.resolve();
   /** Optional resolver for per-room history visibility (default Shared). */
@@ -106,15 +142,58 @@ export class CryptoEngine {
     http: MatrixHttp,
     userId: string,
     deviceId: string,
+    sharePolicy: Required<EncryptionSharePolicy>,
+    onCryptoLog: ((event: CryptoLogEvent) => void) | null,
   ) {
     this.machine = machine;
     this.http = http;
     this.userId = userId;
     this.clientDeviceId = deviceId;
+    this.sharePolicy = sharePolicy;
+    this.onCryptoLog = onCryptoLog;
   }
 
   get isReady(): boolean {
     return this._isReady;
+  }
+
+  /** Emit a structured crypto log event; always mirrors important cases to console. */
+  emitCryptoLog(event: CryptoLogEvent): void {
+    switch (event.type) {
+      case "withheld_detail":
+        console.warn(
+          `[matrixbots] withheld_detail room=${event.roomId} type=${event.eventType} body=${event.bodyPreview}`,
+        );
+        break;
+      case "share_room_key":
+        if (event.withheld > 0 || event.keyShares === 0) {
+          console.warn(
+            `[matrixbots] share_room_key room=${event.roomId} keyShares=${event.keyShares} withheld=${event.withheld} peers=${event.peers.length} policy=${JSON.stringify(event.policy)}`,
+          );
+        }
+        break;
+      case "peer_keys_missing":
+        console.error(
+          `[matrixbots] peer_keys_missing room=${event.roomId} peers=[${event.peers.join(", ")}]`,
+        );
+        break;
+      case "encrypt_send":
+        // Quiet by default — use onCryptoLog for verbose traces.
+        break;
+      case "warn":
+        console.warn(`[matrixbots] ${event.message}`, event.detail ?? "");
+        break;
+      case "error":
+        console.error(`[matrixbots] ${event.message}`, event.detail ?? "");
+        break;
+      default:
+        break;
+    }
+    try {
+      this.onCryptoLog?.(event);
+    } catch (err) {
+      console.warn("[matrixbots] onCryptoLog hook threw:", err);
+    }
   }
 
   setHistoryVisibilityResolver(
@@ -137,7 +216,14 @@ export class CryptoEngine {
       passphrase,
       StoreType.Sqlite,
     );
-    return new CryptoEngine(machine, options.http, options.userId, options.deviceId);
+    return new CryptoEngine(
+      machine,
+      options.http,
+      options.userId,
+      options.deviceId,
+      resolveEncryptionSharePolicy(options.encryption),
+      options.onCryptoLog ?? null,
+    );
   }
 
   private withLock<T>(fn: () => Promise<T>): Promise<T> {
@@ -360,6 +446,7 @@ export class CryptoEngine {
 
   /**
    * Claim missing Olm sessions and share Megolm room key (no plaintext fallback).
+   * Uses {@link sharePolicy} (bot EncryptionSettings — not Synapse config).
    */
   async ensureSessionsAndShare(roomId: string, userIds: string[]): Promise<void> {
     await this.withLock(async () => {
@@ -372,15 +459,13 @@ export class CryptoEngine {
         await this.sendKeysClaim(claim);
       }
 
+      const policy = this.sharePolicy;
       const settings = new EncryptionSettings();
       settings.algorithm = EncryptionAlgorithm.MegolmV1AesSha2;
       const hvName = this.historyVisibilityForRoom?.(roomId);
       settings.historyVisibility = mapHistoryVisibility(hvName);
-      // Platform bots must share with normal (unverified) human devices.
-      // Default/true → m.room_key.withheld → ciphertext the user only decrypts
-      // after a later key share (feels like "bot replies on my next message").
-      settings.onlyAllowTrustedDevices = false;
-      settings.errorOnVerifiedUserProblem = false;
+      settings.onlyAllowTrustedDevices = policy.onlyAllowTrustedDevices;
+      settings.errorOnVerifiedUserProblem = policy.errorOnVerifiedUserProblem;
 
       const toDeviceReqs = await this.machine.shareRoomKey(
         new RoomId(roomId),
@@ -390,18 +475,51 @@ export class CryptoEngine {
       let keyShares = 0;
       let withheld = 0;
       for (const req of toDeviceReqs) {
-        if (req.eventType === "m.room_key.withheld") withheld += 1;
-        else keyShares += 1;
+        if (req.eventType === "m.room_key.withheld") {
+          withheld += 1;
+          let bodyPreview = "";
+          try {
+            bodyPreview = truncateBodyPreview(
+              typeof req.body === "string" ? req.body : JSON.stringify(req.body),
+            );
+          } catch {
+            bodyPreview = "(unreadable withheld body)";
+          }
+          this.emitCryptoLog({
+            type: "withheld_detail",
+            roomId,
+            eventType: req.eventType,
+            bodyPreview,
+          });
+        } else {
+          keyShares += 1;
+        }
         await this.sendToDeviceRequest(req);
       }
+
+      this.emitCryptoLog({
+        type: "share_room_key",
+        roomId,
+        keyShares,
+        withheld,
+        peers: userIds,
+        policy,
+      });
+
       if (keyShares === 0 && withheld > 0) {
-        console.error(
-          `[matrixbots] shareRoomKey for ${roomId}: 0 key shares, ${withheld} withheld — peers will not decrypt`,
-        );
-      } else if (withheld > 0) {
-        console.warn(
-          `[matrixbots] shareRoomKey for ${roomId}: ${keyShares} key share(s), ${withheld} withheld`,
-        );
+        this.emitCryptoLog({
+          type: "error",
+          message: `shareRoomKey for ${roomId}: 0 key shares, ${withheld} withheld — peers will not decrypt`,
+          detail: { roomId, withheld, policy },
+        });
+        throw new RoomKeyWithheldError(roomId, withheld, policy);
+      }
+      if (withheld > 0) {
+        this.emitCryptoLog({
+          type: "warn",
+          message: `shareRoomKey for ${roomId}: ${keyShares} key share(s), ${withheld} withheld (ghost/untrusted devices OK)`,
+          detail: { roomId, keyShares, withheld, policy },
+        });
       }
     });
   }
@@ -413,6 +531,7 @@ export class CryptoEngine {
     userIds: string[],
   ): Promise<Record<string, unknown>> {
     await this.ensureSessionsAndShare(roomId, userIds);
+    this.emitCryptoLog({ type: "encrypt_send", roomId, eventType });
     const encrypted = await this.withLock(async () => {
       const raw = await this.machine.encryptRoomEvent(
         new RoomId(roomId),

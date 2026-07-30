@@ -17,6 +17,8 @@ export {
   CryptoEngine,
   normalizeToDeviceBody,
   mapHistoryVisibility,
+  resolveEncryptionSharePolicy,
+  DEFAULT_ENCRYPTION_SHARE_POLICY,
 } from "./crypto.js";
 export { MatrixHttp, MatrixApiError, normalizeHomeserverUrl } from "./http.js";
 export { SyncLoop, loadSyncState, saveSyncState } from "./sync.js";
@@ -37,11 +39,16 @@ export {
   DeviceMismatchError,
   PeerKeysMissingError,
   EncryptedRoomWithoutCryptoError,
+  RoomKeyWithheldError,
 } from "./errors.js";
+export { defineCommands, matchCommand } from "./commands.js";
+export type { CommandSpec } from "./commands.js";
 export type {
   BotCreateOptions,
   Context,
+  CryptoLogEvent,
   DispatcherOptions,
+  EncryptionSharePolicy,
   FilterFn,
   Handler,
   Middleware,
