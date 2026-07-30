@@ -229,6 +229,22 @@ export class MatrixClient {
   }
 
   /**
+   * Send an m.room.message with a pre-built content object (must include msgtype).
+   * Used by StudNovSU bot-sdk for mini-app cards and custom msgtypes.
+   */
+  async sendMessage(roomId: string, content: Record<string, unknown>): Promise<string> {
+    return this.sendEvent(roomId, "m.room.message", content);
+  }
+
+  /** Fetch a single room event by id (CS API GET .../event/{eventId}). */
+  async getEvent(roomId: string, eventId: string): Promise<Record<string, unknown>> {
+    return this.http.request(
+      "GET",
+      `/_matrix/client/v3/rooms/${encodeURIComponent(roomId)}/event/${encodeURIComponent(eventId)}`,
+    );
+  }
+
+  /**
    * Send HTML-formatted text. Plain body is tag-stripped + entity-decoded.
    * XSS trust boundary: bot author is responsible for HTML content sent to Matrix
    * (clients render formatted_body; we do not execute scripts).
