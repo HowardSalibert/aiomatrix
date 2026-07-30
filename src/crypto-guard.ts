@@ -1,4 +1,4 @@
-import type { MatrixClient } from "matrix-bot-sdk";
+import type { MatrixClient } from "./client.js";
 import {
   CryptoNotReadyError,
   DeviceMismatchError,
@@ -62,7 +62,7 @@ export function hasOwnDeviceKeys(
 }
 
 /**
- * After crypto.prepare + engine flush, verify own device keys exist on HS.
+ * After crypto.prepare + outgoing flush, verify own device keys exist on HS.
  */
 export async function assertOwnDeviceKeysReady(
   client: MatrixClient,
@@ -71,7 +71,6 @@ export async function assertOwnDeviceKeysReady(
 ): Promise<void> {
   const resp = await queryDeviceKeys(client, [userId], { [userId]: [deviceId] });
   if (!hasOwnDeviceKeys(resp, userId, deviceId)) {
-    // Retry once after a short wait — keys/upload may still be in flight.
     await new Promise((r) => setTimeout(r, 500));
     const retry = await queryDeviceKeys(client, [userId], { [userId]: [deviceId] });
     if (!hasOwnDeviceKeys(retry, userId, deviceId)) {
@@ -115,8 +114,6 @@ export async function assertPeersHaveKeys(
   if (!options?.includeBots) {
     peers = peers.filter((u) => !isLikelyBotUserId(u));
   }
-  // Still require at least one peer with keys — if only bots remain and includeBots=false,
-  // fall back to all non-self members so we don't silently skip the check.
   if (peers.length === 0) {
     peers = members.filter((u) => u !== exclude);
   }
@@ -146,7 +143,7 @@ export async function guardedSendText(
   text: string,
   cryptoEnabled: boolean,
 ): Promise<string> {
-  const encrypted = await isRoomEncryptedSafe(client, roomId);
+  const encrypted = await client.isRoomEncrypted(roomId);
   if (encrypted) {
     if (!cryptoEnabled || !client.crypto?.isReady) {
       throw new EncryptedRoomWithoutCryptoError(roomId);
@@ -163,7 +160,7 @@ export async function guardedSendHtml(
   html: string,
   cryptoEnabled: boolean,
 ): Promise<string> {
-  const encrypted = await isRoomEncryptedSafe(client, roomId);
+  const encrypted = await client.isRoomEncrypted(roomId);
   if (encrypted) {
     if (!cryptoEnabled || !client.crypto?.isReady) {
       throw new EncryptedRoomWithoutCryptoError(roomId);
@@ -172,20 +169,4 @@ export async function guardedSendHtml(
     await assertPeersHaveKeys(client, roomId, { excludeUserId: selfId });
   }
   return client.sendHtmlText(roomId, html);
-}
-
-async function isRoomEncryptedSafe(
-  client: MatrixClient,
-  roomId: string,
-): Promise<boolean> {
-  if (client.crypto?.isReady) {
-    return client.crypto.isRoomEncrypted(roomId);
-  }
-  // Crypto disabled: still detect encryption via room state so we never fall back to plaintext.
-  try {
-    const ev = await client.getRoomStateEvent(roomId, "m.room.encryption", "");
-    return Boolean(ev && (ev as { algorithm?: string }).algorithm);
-  } catch {
-    return false;
-  }
 }

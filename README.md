@@ -1,28 +1,29 @@
 # matrixbots
 
-**EN:** Aiogram-like DX for Matrix bots. Crypto is not an optional footgun — E2EE uses `@matrix-org/matrix-sdk-crypto-nodejs` (Rust), never a hand-rolled Olm.
+**EN:** Aiogram-like DX for Matrix bots. Crypto is not an optional footgun — E2EE uses `@matrix-org/matrix-sdk-crypto-nodejs` (Rust OlmMachine) directly, never a hand-rolled Olm.
 
-**RU:** DX как у aiogram для Matrix-ботов. Крипто не «по желанию»: E2EE через `@matrix-org/matrix-sdk-crypto-nodejs` (Rust), без самописного Olm.
+**RU:** DX как у aiogram для Matrix-ботов. Крипто не «по желанию»: E2EE через `@matrix-org/matrix-sdk-crypto-nodejs` (OlmMachine напрямую), без самописного Olm.
 
 Status: **v0.1** — single package at repo root, echo example, strict E2EE contract.
 
-**Deps (v0.1):** `matrix-bot-sdk@0.8.0` + `@matrix-org/matrix-sdk-crypto-nodejs@0.4.x` (peer range of bot-sdk). Newer crypto-nodejs `0.6.x` needs Node ≥24 and is not pinned yet.
+**Deps:** own Client-Server HTTP client + `@matrix-org/matrix-sdk-crypto-nodejs@0.4.x`. **No `matrix-bot-sdk`.**
 
 ## Philosophy
 
 - Telegram-like handlers: `Router`, `Dispatcher`, `Command`, `F`, FSM (`MemoryStorage` + `createStates`).
-- Thin client: `matrix-bot-sdk` + `RustSdkCryptoStorageProvider`.
+- Transport: our `MatrixHttp` / `MatrixClient` / `SyncLoop` (CS API).
+- Crypto: `OlmMachine` via `CryptoEngine` (outgoing request loop, Megolm encrypt/decrypt).
 - **Strict E2EE contract:** the bot must not silently send ciphertext nobody can decrypt, and must not fall back to plaintext in encrypted rooms.
 
 ## Why crypto-nodejs (not reinvented Olm)
 
-Megolm/Olm done wrong = undeliverable secrets and false confidence. We reuse the Matrix.org Rust crypto engine (`matrix-sdk-crypto-nodejs`) via `matrix-bot-sdk`’s storage provider. Device keys are verified against the homeserver (`/_matrix/client/v3/keys/query`) before start and before send.
+Megolm/Olm done wrong = undeliverable secrets and false confidence. We drive the Matrix.org Rust crypto engine (`matrix-sdk-crypto-nodejs`) ourselves — upload/query/claim/to-device over CS HTTP, then `markRequestAsSent`. Device keys are verified against the homeserver (`/_matrix/client/v3/keys/query`) before start and before send.
 
 ## E2EE contract
 
-1. With `crypto: true` (default): init crypto under `storagePath/crypto`, `prepareCrypto`, verify **own** device keys via `keys/query`. Missing → `CryptoNotReadyError` (no half-broken start).
+1. With `crypto: true` (default): init OlmMachine under `storagePath/crypto`, `prepareCrypto` (flush outgoing requests), verify **own** device keys via `keys/query`. Missing → `CryptoNotReadyError` (no half-broken start).
 2. Config `deviceId` must match the client device → else `DeviceMismatchError` (refuse start).
-3. Before send into an encrypted room: `keys/query` joined human peers; zero device keys → `PeerKeysMissingError`, **do not send**.
+3. Before send into an encrypted room: `keys/query` joined human peers; zero device keys → `PeerKeysMissingError`, **do not send**. Then claim sessions, `shareRoomKey`, encrypt as `m.room.encrypted`.
 4. Never plaintext-fallback in encrypted rooms.
 5. `bot.cryptoReady: boolean` after successful verification.
 

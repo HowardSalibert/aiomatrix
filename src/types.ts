@@ -1,8 +1,8 @@
-import type { MatrixClient } from "matrix-bot-sdk";
+import type { MatrixClient } from "./client.js";
 import type { Bot } from "./bot.js";
 import type { FSMContext, Storage } from "./fsm.js";
 
-/** Raw Matrix room message event (subset used by the SDK). */
+/** Raw Matrix room message event (subset used by handlers). */
 export interface MatrixMessageEvent {
   event_id?: string;
   sender?: string;
@@ -61,7 +61,7 @@ export interface BotCreateOptions {
   /** Required when crypto is enabled. */
   deviceId?: string;
   storagePath?: string;
-  /** Default true. When true, Rust crypto is initialized and E2EE contract enforced. */
+  /** Default true. When true, Rust crypto (OlmMachine) is initialized and E2EE contract enforced. */
   crypto?: boolean;
 }
 

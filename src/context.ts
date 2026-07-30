@@ -1,4 +1,4 @@
-import type { MatrixClient } from "matrix-bot-sdk";
+import type { MatrixClient } from "./client.js";
 import type { Bot } from "./bot.js";
 import { guardedSendHtml, guardedSendText } from "./crypto-guard.js";
 import { FSMContext, type Storage } from "./fsm.js";
@@ -10,11 +10,6 @@ export async function detectDirectRoom(
   senderId: string,
 ): Promise<boolean> {
   try {
-    // Prefer m.direct account data map when available.
-    const dms = (client as MatrixClient & { dms?: { getDmRoomId?: (u: string) => string | null | undefined; isDm?: (roomId: string) => boolean } }).dms;
-    if (dms && typeof (dms as { getOrCreateDm?: unknown }).getOrCreateDm === "function") {
-      // matrix-bot-sdk DMs has cached map — check via getJoinedRoomMembers fallback below
-    }
     const members = await client.getJoinedRoomMembers(roomId);
     if (members.length === 2 && members.includes(senderId)) {
       return true;
@@ -64,13 +59,7 @@ export function createContext(params: {
       if (!eventId) {
         throw new Error("Cannot react: missing event_id");
       }
-      return client.sendEvent(roomId, "m.reaction", {
-        "m.relates_to": {
-          rel_type: "m.annotation",
-          event_id: eventId,
-          key,
-        },
-      });
+      return client.sendReaction(roomId, eventId, key);
     },
   };
 

@@ -1,7 +1,7 @@
 {
   "name": "matrixbots",
   "version": "0.1.0",
-  "description": "Aiogram-like DX for Matrix bots with strict E2EE via matrix-sdk-crypto-nodejs",
+  "description": "Aiogram-like DX for Matrix bots — own CS client + OlmMachine (no matrix-bot-sdk)",
   "type": "module",
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
@@ -38,8 +38,7 @@
     "url": "git+https://github.com/HowardSalibert/matrixbots.git"
   },
   "dependencies": {
-    "@matrix-org/matrix-sdk-crypto-nodejs": "^0.4.0",
-    "matrix-bot-sdk": "^0.8.0"
+    "@matrix-org/matrix-sdk-crypto-nodejs": "^0.4.0"
   },
   "devDependencies": {
     "@types/node": "^22.10.0",
