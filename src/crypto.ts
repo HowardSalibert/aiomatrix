@@ -376,14 +376,32 @@ export class CryptoEngine {
       settings.algorithm = EncryptionAlgorithm.MegolmV1AesSha2;
       const hvName = this.historyVisibilityForRoom?.(roomId);
       settings.historyVisibility = mapHistoryVisibility(hvName);
+      // Platform bots must share with normal (unverified) human devices.
+      // Default/true → m.room_key.withheld → ciphertext the user only decrypts
+      // after a later key share (feels like "bot replies on my next message").
+      settings.onlyAllowTrustedDevices = false;
+      settings.errorOnVerifiedUserProblem = false;
 
       const toDeviceReqs = await this.machine.shareRoomKey(
         new RoomId(roomId),
         users,
         settings,
       );
+      let keyShares = 0;
+      let withheld = 0;
       for (const req of toDeviceReqs) {
+        if (req.eventType === "m.room_key.withheld") withheld += 1;
+        else keyShares += 1;
         await this.sendToDeviceRequest(req);
+      }
+      if (keyShares === 0 && withheld > 0) {
+        console.error(
+          `[matrixbots] shareRoomKey for ${roomId}: 0 key shares, ${withheld} withheld — peers will not decrypt`,
+        );
+      } else if (withheld > 0) {
+        console.warn(
+          `[matrixbots] shareRoomKey for ${roomId}: ${keyShares} key share(s), ${withheld} withheld`,
+        );
       }
     });
   }
