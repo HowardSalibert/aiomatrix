@@ -29,8 +29,9 @@ export class Dispatcher {
 
   async feed(bot: Bot, roomId: string, event: MatrixMessageEvent): Promise<void> {
     if (!event.content?.msgtype) return;
-    // Ignore own messages
+
     const selfId = await bot.client.getUserId();
+    // Ignore own messages (incl. m.notice echoes and unsigned.transaction_id echoes)
     if (event.sender === selfId) return;
 
     const isDirect = await detectDirectRoom(bot.client, roomId, event.sender ?? "");

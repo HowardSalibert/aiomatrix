@@ -31,6 +31,7 @@ const bot = await Bot.create({
   deviceId,
   storagePath: path.join(__dirname, "../data"),
   crypto: true,
+  autojoin: true,
 });
 
 const dp = new Dispatcher({ storage: new MemoryStorage() });

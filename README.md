@@ -4,28 +4,49 @@
 
 **RU:** DX как у aiogram для Matrix-ботов. Крипто не «по желанию»: E2EE через `@matrix-org/matrix-sdk-crypto-nodejs` (OlmMachine напрямую), без самописного Olm.
 
-Status: **v0.1** — single package at repo root, echo example, strict E2EE contract.
+Status: **v0.2.0** — hardened sync/E2EE/HTTP (see [AUDIT.md](./AUDIT.md)). **No `matrix-bot-sdk`.**
 
-**Deps:** own Client-Server HTTP client + `@matrix-org/matrix-sdk-crypto-nodejs@0.4.x`. **No `matrix-bot-sdk`.**
+**Deps:** own Client-Server HTTP client + `@matrix-org/matrix-sdk-crypto-nodejs@0.4.x` (sole runtime dependency). Node `>=20`.
 
-## Philosophy
+## Architecture
 
-- Telegram-like handlers: `Router`, `Dispatcher`, `Command`, `F`, FSM (`MemoryStorage` + `createStates`).
-- Transport: our `MatrixHttp` / `MatrixClient` / `SyncLoop` (CS API).
-- Crypto: `OlmMachine` via `CryptoEngine` (outgoing request loop, Megolm encrypt/decrypt).
-- **Strict E2EE contract:** the bot must not silently send ciphertext nobody can decrypt, and must not fall back to plaintext in encrypted rooms.
-
-## Why crypto-nodejs (not reinvented Olm)
-
-Megolm/Olm done wrong = undeliverable secrets and false confidence. We drive the Matrix.org Rust crypto engine (`matrix-sdk-crypto-nodejs`) ourselves — upload/query/claim/to-device over CS HTTP, then `markRequestAsSent`. Device keys are verified against the homeserver (`/_matrix/client/v3/keys/query`) before start and before send.
+```
+┌─────────────────────────────────────────────────────────┐
+│  Bot / Dispatcher / Router / Command / F / FSM          │  ← public DX
+├─────────────────────────────────────────────────────────┤
+│  MatrixClient  (join, typing, send*, encrypt path)      │
+│  SyncLoop      (filter bootstrap, abort, backoff≤30s)   │
+│  MatrixHttp    (timeouts, AbortSignal, MatrixApiError)  │
+├─────────────────────────────────────────────────────────┤
+│  CryptoEngine → OlmMachine (Rust)                       │
+│  outgoing: upload/query/claim/to-device/signatures       │
+│  Megolm encrypt/decrypt; history_visibility-aware share │
+└─────────────────────────────────────────────────────────┘
+```
 
 ## E2EE contract
 
-1. With `crypto: true` (default): init OlmMachine under `storagePath/crypto`, `prepareCrypto` (flush outgoing requests), verify **own** device keys via `keys/query`. Missing → `CryptoNotReadyError` (no half-broken start).
-2. Config `deviceId` must match the client device → else `DeviceMismatchError` (refuse start).
-3. Before send into an encrypted room: `keys/query` joined human peers; zero device keys → `PeerKeysMissingError`, **do not send**. Then claim sessions, `shareRoomKey`, encrypt as `m.room.encrypted`.
-4. Never plaintext-fallback in encrypted rooms.
-5. `bot.cryptoReady: boolean` after successful verification.
+1. With `crypto: true` (default): init OlmMachine under `storagePath/crypto`, `prepareCrypto` (flush outgoing), verify **own** device keys via `keys/query` (5 attempts, backoff 300–2400ms). Missing → `CryptoNotReadyError`.
+2. Config `deviceId` (or `storagePath/device.json`) must match crypto device after prepare → else `DeviceMismatchError`. Whoami without `device_id` does not fail before prepare.
+3. Before send into an encrypted room: `keys/query` joined human peers; zero device keys → `PeerKeysMissingError`, **do not send**. Then claim sessions, `shareRoomKey` (room `history_visibility`), encrypt as `m.room.encrypted`.
+4. Never plaintext-fallback in encrypted rooms. Reactions use the same `sendEvent` encrypt path.
+5. Cold sync: filter `timeline.limit: 0` + skip handler dispatch on bootstrap; `bootstrap_done` in `sync.json`.
+6. `bot.cryptoReady: boolean` after successful verification.
+
+## v0.2 hardening (summary)
+
+- Sync bootstrap / no history flood; autojoin invites; limited-timeline state refresh
+- ToDevice `{ messages }` normalization; KeysBackup never stalls the queue
+- HTTP 60s timeout + AbortController on sync stop; auth fatal stops the loop
+- Device persistence (`device.json`); optional `cryptoStorePassphrase`; `autojoin`
+- Event dedup (512), per-room/global dispatch queue, path-traversal refuse on `storagePath`
+- Mentions helper `F.mention` / `mentioned`; `setTyping`; `joinRoom`; exported `MatrixApiError`
+
+Full findings → [AUDIT.md](./AUDIT.md).
+
+## XSS / HTML trust boundary
+
+`sendHtmlText` / `ctx.replyHtml` send `formatted_body` to Matrix as markup. This library does **not** execute HTML; Matrix clients may render it. **Bot authors are responsible** for sanitizing any untrusted HTML before calling these APIs.
 
 ## Quickstart
 
@@ -33,18 +54,13 @@ Megolm/Olm done wrong = undeliverable secrets and false confidence. We drive the
 cd Z:\MatrixBots
 npm install
 npm run build
+npm test
 
 cd examples\echo
 copy .env.example .env
 # fill MATRIX_HS_URL, MATRIX_ACCESS_TOKEN, MATRIX_DEVICE_ID
 npm install
 npx tsx src/main.ts
-```
-
-Or from repo root (after building and filling `examples/echo/.env`):
-
-```bash
-npm run dev
 ```
 
 ### Minimal bot
@@ -63,37 +79,21 @@ import {
 const bot = await Bot.create({
   homeserverUrl: process.env.MATRIX_HS_URL!,
   accessToken: process.env.MATRIX_ACCESS_TOKEN!,
-  deviceId: process.env.MATRIX_DEVICE_ID!, // REQUIRED when crypto enabled
+  deviceId: process.env.MATRIX_DEVICE_ID!, // REQUIRED when crypto enabled (or device.json)
   storagePath: './data',
   crypto: true, // default true
+  autojoin: true, // default true
 });
 
 const dp = new Dispatcher({ storage: new MemoryStorage() });
 const router = new Router('main');
 
-const Form = createStates('Form', ['name', 'done'] as const);
-
-router.message(Command('start'), async (ctx) => {
-  await ctx.reply('Hi! Send /echo <text>');
-});
-
 router.message(Command('echo'), async (ctx) => {
-  const text = ctx.commandArgs.trim() || '…';
-  await ctx.reply(text);
+  await ctx.reply(ctx.commandArgs.trim() || '…');
 });
 
-router.message(F.text.equals('ping'), async (ctx) => {
-  await ctx.reply('pong');
-});
-
-router.message(Command('name'), async (ctx) => {
-  await ctx.state.setState(Form.name);
-  await ctx.reply('Как тебя зовут?');
-});
-router.message(Form.name, F.text, async (ctx) => {
-  await ctx.state.updateData({ name: ctx.text });
-  await ctx.state.setState(Form.done);
-  await ctx.reply(`Приятно, ${ctx.text}`);
+router.message(F.mention('MyBot'), async (ctx) => {
+  await ctx.reply('You mentioned me');
 });
 
 dp.include(router);

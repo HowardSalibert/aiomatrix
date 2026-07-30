@@ -4,6 +4,7 @@ import {
   EncryptionAlgorithm,
   EncryptionSettings,
   HistoryVisibility,
+  KeysBackupRequest,
   KeysClaimRequest,
   KeysQueryRequest,
   KeysUploadRequest,
@@ -23,6 +24,8 @@ export interface CryptoEngineCreateOptions {
   deviceId: string;
   storePath: string;
   http: MatrixHttp;
+  /** Optional passphrase for encrypting the crypto store on disk. */
+  storePassphrase?: string | null;
 }
 
 type OutgoingRequest =
@@ -31,7 +34,56 @@ type OutgoingRequest =
   | KeysClaimRequest
   | ToDeviceRequest
   | SignatureUploadRequest
-  | RoomMessageRequest;
+  | RoomMessageRequest
+  | KeysBackupRequest;
+
+export type HistoryVisibilityName =
+  | "invited"
+  | "joined"
+  | "shared"
+  | "world_readable";
+
+/** Map Matrix history_visibility string → crypto-nodejs enum (default Shared). */
+export function mapHistoryVisibility(
+  value: string | null | undefined,
+): HistoryVisibility {
+  switch (value) {
+    case "invited":
+      return HistoryVisibility.Invited;
+    case "joined":
+      return HistoryVisibility.Joined;
+    case "world_readable":
+      return HistoryVisibility.WorldReadable;
+    case "shared":
+    default:
+      return HistoryVisibility.Shared;
+  }
+}
+
+/**
+ * Normalize ToDeviceRequest.body to HTTP PUT shape `{ messages: ... }`.
+ * Exported for unit tests.
+ */
+export function normalizeToDeviceBody(parsed: unknown): { messages: unknown } {
+  if (parsed && typeof parsed === "object") {
+    const obj = parsed as Record<string, unknown>;
+    if ("messages" in obj) {
+      return { messages: obj.messages };
+    }
+    // Some builds nest as { content: { messages } } or body already is the map
+    if (
+      obj.content &&
+      typeof obj.content === "object" &&
+      obj.content !== null &&
+      "messages" in (obj.content as object)
+    ) {
+      return { messages: (obj.content as { messages: unknown }).messages };
+    }
+    // Assume the object itself is the user→device→content map
+    return { messages: obj };
+  }
+  return { messages: {} };
+}
 
 /**
  * Thin wrapper around OlmMachine + CS HTTP outgoing-request runner.
@@ -44,6 +96,10 @@ export class CryptoEngine {
   private readonly machine: OlmMachine;
   private _isReady = false;
   private chain: Promise<unknown> = Promise.resolve();
+  /** Optional resolver for per-room history visibility (default Shared). */
+  private historyVisibilityForRoom:
+    | ((roomId: string) => HistoryVisibilityName | null | undefined)
+    | null = null;
 
   private constructor(
     machine: OlmMachine,
@@ -61,12 +117,24 @@ export class CryptoEngine {
     return this._isReady;
   }
 
+  setHistoryVisibilityResolver(
+    fn: (roomId: string) => HistoryVisibilityName | null | undefined,
+  ): void {
+    this.historyVisibilityForRoom = fn;
+  }
+
   static async create(options: CryptoEngineCreateOptions): Promise<CryptoEngine> {
+    const passphrase = options.storePassphrase ?? null;
+    if (!passphrase) {
+      console.warn(
+        "[matrixbots] crypto store passphrase is empty — OlmMachine SQLite store is unencrypted on disk",
+      );
+    }
     const machine = await OlmMachine.initialize(
       new UserId(options.userId),
       new DeviceId(options.deviceId),
       options.storePath,
-      null,
+      passphrase,
       StoreType.Sqlite,
     );
     return new CryptoEngine(machine, options.http, options.userId, options.deviceId);
@@ -115,7 +183,7 @@ export class CryptoEngine {
   }
 
   private async runOutgoingRequestsUnlocked(): Promise<number> {
-    const requests = await this.machine.outgoingRequests();
+    const requests = (await this.machine.outgoingRequests()) as OutgoingRequest[];
     for (const request of requests) {
       await this.dispatchRequest(request);
     }
@@ -193,8 +261,35 @@ export class CryptoEngine {
         );
         break;
       }
-      default:
-        console.warn(`[matrixbots] unsupported outgoing crypto request type: ${request.type}`);
+      case RequestType.KeysBackup: {
+        // No key-backup setup in this SDK — mark sent so the queue never stalls.
+        console.warn(
+          "[matrixbots] KeysBackup outgoing request skipped (key backup not configured); marking sent",
+        );
+        await this.machine.markRequestAsSent(
+          request.id,
+          RequestType.KeysBackup,
+          "{}",
+        );
+        break;
+      }
+      default: {
+        const req = request as { id?: string; type?: unknown };
+        console.warn(
+          `[matrixbots] unsupported outgoing crypto request type: ${String(req.type)} — marking sent to avoid stall`,
+        );
+        if (req.id != null && req.type != null) {
+          try {
+            await this.machine.markRequestAsSent(
+              req.id,
+              req.type as RequestType,
+              "{}",
+            );
+          } catch (err) {
+            console.warn("[matrixbots] markRequestAsSent failed for unknown type:", err);
+          }
+        }
+      }
     }
   }
 
@@ -215,10 +310,11 @@ export class CryptoEngine {
 
   /**
    * ToDeviceRequest fields (crypto-nodejs 0.4): id, eventType, txnId, body, type.
-   * HTTP: PUT /sendToDevice/{eventType}/{txnId} with body JSON (messages).
+   * HTTP: PUT /sendToDevice/{eventType}/{txnId} with body `{ messages: ... }`.
    */
   private async sendToDeviceRequest(request: ToDeviceRequest): Promise<void> {
-    const body = JSON.parse(request.body) as unknown;
+    const parsed = JSON.parse(request.body) as unknown;
+    const body = normalizeToDeviceBody(parsed);
     const resp = await this.http.request(
       "PUT",
       `/_matrix/client/v3/sendToDevice/${encodeURIComponent(request.eventType)}/${encodeURIComponent(request.txnId)}`,
@@ -278,7 +374,8 @@ export class CryptoEngine {
 
       const settings = new EncryptionSettings();
       settings.algorithm = EncryptionAlgorithm.MegolmV1AesSha2;
-      settings.historyVisibility = HistoryVisibility.Shared;
+      const hvName = this.historyVisibilityForRoom?.(roomId);
+      settings.historyVisibility = mapHistoryVisibility(hvName);
 
       const toDeviceReqs = await this.machine.shareRoomKey(
         new RoomId(roomId),

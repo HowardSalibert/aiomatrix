@@ -61,24 +61,27 @@ export function hasOwnDeviceKeys(
   return Object.keys(keys).length > 0;
 }
 
+const OWN_KEYS_BACKOFF_MS = [300, 600, 1200, 2400] as const;
+
 /**
  * After crypto.prepare + outgoing flush, verify own device keys exist on HS.
+ * 5 attempts with backoff 300/600/1200/2400 ms between tries.
  */
 export async function assertOwnDeviceKeysReady(
   client: MatrixClient,
   userId: string,
   deviceId: string,
 ): Promise<void> {
-  const resp = await queryDeviceKeys(client, [userId], { [userId]: [deviceId] });
-  if (!hasOwnDeviceKeys(resp, userId, deviceId)) {
-    await new Promise((r) => setTimeout(r, 500));
-    const retry = await queryDeviceKeys(client, [userId], { [userId]: [deviceId] });
-    if (!hasOwnDeviceKeys(retry, userId, deviceId)) {
-      throw new CryptoNotReadyError(
-        `CryptoNotReadyError: own device keys missing for ${userId} / ${deviceId} after prepare+flush. Refusing to start half-broken.`,
-      );
+  for (let attempt = 0; attempt < 5; attempt++) {
+    const resp = await queryDeviceKeys(client, [userId], { [userId]: [deviceId] });
+    if (hasOwnDeviceKeys(resp, userId, deviceId)) return;
+    if (attempt < OWN_KEYS_BACKOFF_MS.length) {
+      await new Promise((r) => setTimeout(r, OWN_KEYS_BACKOFF_MS[attempt]));
     }
   }
+  throw new CryptoNotReadyError(
+    `CryptoNotReadyError: own device keys missing for ${userId} / ${deviceId} after prepare+flush. Refusing to start half-broken.`,
+  );
 }
 
 export function assertDeviceIdMatch(
@@ -91,12 +94,17 @@ export function assertDeviceIdMatch(
 }
 
 /**
- * Heuristic: Matrix user localparts ending with "bot" or containing "_bot"/"-bot"
- * are treated as bots (optional skip). Humans = everyone else including self.
+ * Heuristic aligned with StudNovSU: localpart starts with `bot_`,
+ * contains `_bot`/`-bot`, or ends with `bot`.
  */
 export function isLikelyBotUserId(userId: string): boolean {
   const local = userId.replace(/^@/, "").split(":")[0]?.toLowerCase() ?? "";
-  return local.endsWith("bot") || local.includes("_bot") || local.includes("-bot");
+  return (
+    local.startsWith("bot_") ||
+    local.includes("_bot") ||
+    local.includes("-bot") ||
+    local.endsWith("bot")
+  );
 }
 
 /**

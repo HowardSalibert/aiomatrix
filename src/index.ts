@@ -1,7 +1,7 @@
 export { Bot } from "./bot.js";
 export { Dispatcher } from "./dispatcher.js";
 export { Router } from "./router.js";
-export { Command, F } from "./filters.js";
+export { Command, F, mentioned } from "./filters.js";
 export type { Filter } from "./filters.js";
 export { MemoryStorage, createStates, FSMContext, storageKey } from "./fsm.js";
 export type { Storage, StorageRecord } from "./fsm.js";
@@ -11,10 +11,16 @@ export {
   createMatrixClient,
   prepareCrypto,
   resolveDeviceId,
+  htmlToPlainBody,
 } from "./client.js";
-export { CryptoEngine } from "./crypto.js";
-export { MatrixHttp, MatrixApiError } from "./http.js";
+export {
+  CryptoEngine,
+  normalizeToDeviceBody,
+  mapHistoryVisibility,
+} from "./crypto.js";
+export { MatrixHttp, MatrixApiError, normalizeHomeserverUrl } from "./http.js";
 export { SyncLoop, loadSyncState, saveSyncState } from "./sync.js";
+export { DispatchQueue, EventDeduper } from "./dispatch-queue.js";
 export {
   assertOwnDeviceKeysReady,
   assertDeviceIdMatch,
@@ -22,6 +28,7 @@ export {
   guardedSendText,
   guardedSendHtml,
   queryDeviceKeys,
+  isLikelyBotUserId,
 } from "./crypto-guard.js";
 export { compose } from "./middleware.js";
 export {

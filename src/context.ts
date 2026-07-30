@@ -10,6 +10,12 @@ export async function detectDirectRoom(
   senderId: string,
 ): Promise<boolean> {
   try {
+    const directs = await client.getDirectRoomIds();
+    if (directs.has(roomId)) return true;
+  } catch {
+    // ignore
+  }
+  try {
     const members = await client.getJoinedRoomMembers(roomId);
     if (members.length === 2 && members.includes(senderId)) {
       return true;
@@ -59,6 +65,7 @@ export function createContext(params: {
       if (!eventId) {
         throw new Error("Cannot react: missing event_id");
       }
+      // sendReaction → sendEvent → encrypt path in encrypted rooms
       return client.sendReaction(roomId, eventId, key);
     },
   };

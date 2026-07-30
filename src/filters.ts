@@ -58,6 +58,23 @@ function truthyText(ctx: Context): boolean {
   return Boolean((ctx.text ?? "").trim());
 }
 
+function mentionMatches(ctx: Context, name: string): boolean {
+  const needle = name.trim().toLowerCase();
+  if (!needle) return false;
+  const body = (ctx.body ?? ctx.text ?? "").toLowerCase();
+  // display name substring or @localpart
+  if (body.includes(needle)) return true;
+  const local = needle.replace(/^@/, "").split(":")[0] ?? needle;
+  if (body.includes(`@${local}`)) return true;
+  // Matrix mention pill in formatted_body
+  const formatted =
+    typeof ctx.event.content?.formatted_body === "string"
+      ? ctx.event.content.formatted_body.toLowerCase()
+      : "";
+  if (formatted.includes(needle) || formatted.includes(`@${local}`)) return true;
+  return false;
+}
+
 export const F = {
   /** Truthy non-empty text body. */
   text: Object.assign(
@@ -78,4 +95,13 @@ export const F = {
     dm: ((ctx: Context) => ctx.isDirect) as FilterFn,
     group: ((ctx: Context) => !ctx.isDirect) as FilterFn,
   },
+  /** Match display name or localpart mention in body / formatted_body. */
+  mention(displayNameOrLocalpart: string): FilterFn {
+    return (ctx) => mentionMatches(ctx, displayNameOrLocalpart);
+  },
 };
+
+/** Standalone mention filter helper. */
+export function mentioned(ctx: Context, displayNameOrLocalpart: string): boolean {
+  return mentionMatches(ctx, displayNameOrLocalpart);
+}

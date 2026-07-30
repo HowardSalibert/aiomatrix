@@ -58,11 +58,15 @@ export interface Context {
 export interface BotCreateOptions {
   homeserverUrl: string;
   accessToken: string;
-  /** Required when crypto is enabled. */
+  /** Required when crypto is enabled (or loaded from storagePath/device.json). */
   deviceId?: string;
   storagePath?: string;
   /** Default true. When true, Rust crypto (OlmMachine) is initialized and E2EE contract enforced. */
   crypto?: boolean;
+  /** Auto-join invited rooms. Default true. */
+  autojoin?: boolean;
+  /** Passphrase for OlmMachine SQLite store. Empty → warn once (unencrypted store). */
+  cryptoStorePassphrase?: string;
 }
 
 export interface DispatcherOptions {

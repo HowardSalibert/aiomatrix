@@ -39,18 +39,20 @@ export class Bot {
 
   static async create(options: BotCreateOptions): Promise<Bot> {
     const cryptoEnabled = options.crypto !== false;
-    if (cryptoEnabled && !options.deviceId) {
+    // deviceId may come from options or storagePath/device.json (resolved in createMatrixClient)
+    const created = await createMatrixClient(options);
+
+    if (cryptoEnabled && !created.client.getDeviceId() && !options.deviceId) {
       throw new Error(
-        "deviceId is REQUIRED when crypto is enabled (set MATRIX_DEVICE_ID / BotCreateOptions.deviceId)",
+        "deviceId is REQUIRED when crypto is enabled (set MATRIX_DEVICE_ID / BotCreateOptions.deviceId or storagePath/device.json)",
       );
     }
 
-    const created = await createMatrixClient(options);
     return new Bot(
       created.client,
       created.storagePath,
       created.cryptoEnabled,
-      created.configuredDeviceId,
+      options.deviceId ?? created.configuredDeviceId,
     );
   }
 
@@ -66,7 +68,8 @@ export class Bot {
     if (this.cryptoEnabled) {
       const whoami = await this.client.getWhoAmI();
       const whoamiDevice = whoami.device_id ?? null;
-      if (this.configuredDeviceId) {
+      // Only enforce whoami match when HS returns device_id
+      if (this.configuredDeviceId && whoamiDevice) {
         assertDeviceIdMatch(this.configuredDeviceId, whoamiDevice);
       }
     }
@@ -75,31 +78,40 @@ export class Bot {
       await prepareCrypto(this.client);
 
       const deviceId = await resolveDeviceId(this.client);
+      const cryptoDevice = this.client.crypto?.clientDeviceId ?? null;
+
+      // After prepare: configured deviceId must equal crypto.clientDeviceId
       if (this.configuredDeviceId) {
-        assertDeviceIdMatch(this.configuredDeviceId, deviceId);
-      }
-      const cryptoDevice = this.client.crypto?.clientDeviceId;
-      if (
-        this.configuredDeviceId &&
-        cryptoDevice &&
-        cryptoDevice !== this.configuredDeviceId
-      ) {
-        throw new DeviceMismatchError(this.configuredDeviceId, cryptoDevice);
+        if (!cryptoDevice || cryptoDevice !== this.configuredDeviceId) {
+          throw new DeviceMismatchError(this.configuredDeviceId, cryptoDevice);
+        }
+        if (deviceId) {
+          assertDeviceIdMatch(this.configuredDeviceId, deviceId);
+        }
       }
 
       const userId = await this.client.getUserId();
-      const readyDevice = deviceId ?? this.configuredDeviceId!;
+      const readyDevice = cryptoDevice ?? deviceId ?? this.configuredDeviceId;
+      if (!readyDevice) {
+        throw new Error("No deviceId available after prepareCrypto");
+      }
       await assertOwnDeviceKeysReady(this.client, userId, readyDevice);
       this._cryptoReady = true;
     } else {
       this._cryptoReady = false;
     }
 
-    await this.client.start((roomId, event) => {
-      void dispatcher.feed(this, roomId, event).catch((err: unknown) => {
-        console.error("[matrixbots] handler error:", err);
-      });
-    });
+    await this.client.start(
+      (roomId, event) => {
+        void dispatcher.feed(this, roomId, event).catch((err: unknown) => {
+          console.error("[matrixbots] handler error:", err);
+        });
+      },
+      (err) => {
+        console.error("[matrixbots] fatal sync error:", err);
+        this.started = false;
+      },
+    );
     this.started = true;
     console.log(
       `[matrixbots] Bot started (crypto=${this.cryptoEnabled}, cryptoReady=${this._cryptoReady})`,
@@ -107,7 +119,7 @@ export class Bot {
   }
 
   async stop(): Promise<void> {
-    this.client.stop();
+    await this.client.stop();
     this.started = false;
   }
 

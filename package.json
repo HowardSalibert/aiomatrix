@@ -1,6 +1,6 @@
 {
   "name": "matrixbots",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Aiogram-like DX for Matrix bots — own CS client + OlmMachine (no matrix-bot-sdk)",
   "type": "module",
   "main": "./dist/index.js",
@@ -14,13 +14,15 @@
   "files": [
     "dist",
     "README.md",
-    "LICENSE"
+    "LICENSE",
+    "AUDIT.md"
   ],
   "engines": {
     "node": ">=20"
   },
   "scripts": {
     "build": "tsc",
+    "test": "npm run build && node --test test/*.test.mjs",
     "dev": "tsx examples/echo/src/main.ts",
     "prepublishOnly": "npm run build"
   },
