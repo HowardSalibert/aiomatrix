@@ -1,0 +1,49 @@
+{
+  "name": "matrixbots",
+  "version": "0.1.0",
+  "description": "Aiogram-like DX for Matrix bots with strict E2EE via matrix-sdk-crypto-nodejs",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE"
+  ],
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "build": "tsc",
+    "dev": "tsx examples/echo/src/main.ts",
+    "prepublishOnly": "npm run build"
+  },
+  "keywords": [
+    "matrix",
+    "bot",
+    "e2ee",
+    "aiogram",
+    "matrixbots"
+  ],
+  "author": "Howard Salibert / StudNovSU contributors",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/HowardSalibert/matrixbots.git"
+  },
+  "dependencies": {
+    "@matrix-org/matrix-sdk-crypto-nodejs": "^0.4.0",
+    "matrix-bot-sdk": "^0.8.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.0",
+    "tsx": "^4.19.2",
+    "typescript": "^5.7.2"
+  }
+}

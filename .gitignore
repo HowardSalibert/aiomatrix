@@ -1,0 +1,12 @@
+node_modules/
+dist/
+data/
+.env
+*.log
+*.tgz
+_inspect/
+.DS_Store
+*.tsbuildinfo
+examples/**/data/
+examples/**/node_modules/
+examples/**/dist/

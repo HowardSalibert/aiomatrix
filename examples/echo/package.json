@@ -1,0 +1,17 @@
+{
+  "name": "matrixbots-echo-example",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "start": "tsx src/main.ts",
+    "dev": "tsx src/main.ts"
+  },
+  "dependencies": {
+    "dotenv": "^16.4.7",
+    "matrixbots": "file:../.."
+  },
+  "devDependencies": {
+    "tsx": "^4.19.2",
+    "typescript": "^5.7.2"
+  }
+}
