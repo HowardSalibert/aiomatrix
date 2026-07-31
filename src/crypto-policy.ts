@@ -10,16 +10,21 @@ import { isPlainObject } from "./util.js";
  */
 
 /**
- * Bot defaults. Note `rotateEveryMessage: false`: rotating on every message
- * forces a fresh Megolm session plus a full to-device re-share to every device
- * of every member, which in a large room means thousands of to-device messages
- * per reply. Correctness is preserved instead by invalidating the share when
- * membership or device lists actually change.
+ * Bot defaults. `rotateEveryMessage: true` is intentional for correctness:
+ * after a human crypto wipe the Rust machine often believes the outbound
+ * Megolm session was "already shared" to the same device_id and skips the
+ * to-device fanout — peers see ciphertext that only decrypts after a later
+ * key exchange (feels like "bot replies on my second message"). Fresh session
+ * per encrypt forces a real share to current devices.
+ *
+ * Large rooms that need the cheaper path can set `rotateEveryMessage: false`
+ * and rely on `reshareOnDeviceChange` + rotation periods — accept the wipe
+ * edge case or call `invalidateRoomShare(roomId)` after known peer resets.
  */
 export const DEFAULT_ENCRYPTION_SHARE_POLICY: Required<EncryptionSharePolicy> = {
   onlyAllowTrustedDevices: false,
   errorOnVerifiedUserProblem: false,
-  rotateEveryMessage: false,
+  rotateEveryMessage: true,
   rotationPeriodMessages: 100,
   rotationPeriodMs: 7 * 24 * 60 * 60 * 1000,
   reshareOnDeviceChange: true,

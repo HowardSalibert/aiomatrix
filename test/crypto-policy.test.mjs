@@ -9,14 +9,15 @@ import {
 import { RoomKeyWithheldError } from "../dist/errors.js";
 
 describe("resolveEncryptionSharePolicy", () => {
-  it("shares with unverified devices but does not rotate per message", () => {
+  it("shares with unverified devices and rotates per message by default", () => {
     const policy = resolveEncryptionSharePolicy();
     assert.deepEqual(policy, DEFAULT_ENCRYPTION_SHARE_POLICY);
     assert.equal(policy.onlyAllowTrustedDevices, false);
     assert.equal(policy.errorOnVerifiedUserProblem, false);
-    // Rotating on every message re-shares Megolm to every device of every
-    // member and was the single biggest cost in the 0.2 send path.
-    assert.equal(policy.rotateEveryMessage, false);
+    // Default true: avoids "bot reply decrypts only after the user's next
+    // message" when peers wipe crypto and the machine skips an already-shared
+    // Megolm session. Large rooms may opt out explicitly.
+    assert.equal(policy.rotateEveryMessage, true);
     assert.equal(policy.rotationPeriodMessages, 100);
     assert.equal(policy.rotationPeriodMs, 7 * 24 * 60 * 60 * 1000);
     assert.equal(policy.reshareOnDeviceChange, true);

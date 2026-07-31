@@ -3,6 +3,22 @@
 All notable changes to this project. Format loosely follows [Keep a Changelog]; the project uses
 semantic versioning.
 
+## 0.3.1
+
+### Fixed
+
+- **First bot reply undecryptable until the user's next message.** 0.3.0 defaulted
+  `rotateEveryMessage` to `false` and skipped Megolm re-share when the outbound session looked
+  "already shared". After a human crypto wipe (often same `device_id`), peers received ciphertext
+  without keys until a later device-list / key exchange. Defaults are restored to
+  `rotateEveryMessage: true`, and when rotating the bot refreshes KeysQuery for **all** share
+  peers (not only sync-dirty users) before `shareRoomKey`.
+
+### Notes
+
+- Large rooms that need the cheaper share cache can still set `encryption: { rotateEveryMessage: false }`
+  and rely on `reshareOnDeviceChange` — document the peer-wipe edge case for your operators.
+
 ## 0.3.0
 
 A near-total rework toward the aiogram feature set, plus the MiniApp platform. The message-handling

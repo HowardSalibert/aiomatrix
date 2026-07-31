@@ -284,9 +284,11 @@ export interface EncryptionSharePolicy {
   /** Default false — don't fail the share on verified-user/unverified-device problems. */
   errorOnVerifiedUserProblem?: boolean;
   /**
-   * Default **false**. When true, every encrypt starts a new outbound Megolm
-   * session and re-shares it to every device of every member. Correct but very
-   * expensive; only enable it for tiny rooms with hostile key hygiene.
+   * Default **true**. Every encrypt starts a new outbound Megolm session and
+   * re-shares it to current peer devices — required so peers who wiped crypto
+   * still decrypt the bot's *first* reply (not only after a later key exchange).
+   * Set `false` for large rooms and rely on `reshareOnDeviceChange` + rotation
+   * periods (accepts the peer-wipe edge case unless you invalidate shares).
    */
   rotateEveryMessage?: boolean;
   /** Messages before the outbound session rotates. Default 100. */

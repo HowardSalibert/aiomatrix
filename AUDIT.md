@@ -185,7 +185,7 @@ Full-project sweep for bottlenecks, illogical behaviour, leaks, vulnerabilities,
 
 | # | Issue | Fix |
 |---|---|---|
-| 1 | `rotateEveryMessage: true` default re-shared Megolm to every device per message, with a `/keys/query` per send | Default `false`; share sets cached per room, invalidated on device-list change |
+| 1 | `rotateEveryMessage: true` default re-shared Megolm to every device per message, with a `/keys/query` per send | 0.3.0 tried default `false` + share cache; **0.3.1 restored `true`** — false caused first bot replies to stay undecryptable after peer crypto wipe until a later key exchange |
 | 2 | Room state re-fetched over HTTP inside filters | `RoomCache` populated from `/sync`, LRU-bounded |
 | 3 | `EventDeduper` used `Array.shift()` (O(n) per event) | Head pointer, amortized O(1) |
 | 4 | `DispatchQueue.release()` woke every waiter | Wake exactly one |

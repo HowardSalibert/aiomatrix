@@ -611,9 +611,14 @@ export class CryptoEngine {
         await this.runOutgoingRequestsUnlocked();
       }
 
-      // Only force a device-list refresh for peers we know changed. Doing this
-      // unconditionally costs a full /keys/query per outgoing message.
-      const stale = peers.filter((u) => this.dirtyUsers.has(u));
+      const policy = this.sharePolicy;
+
+      // Refresh identity keys before share. When rotating every message, query
+      // all peers (peer wipe / same device_id must not use a stale KeysQuery
+      // cache). Otherwise only peers marked dirty by device-list sync.
+      const stale = policy.rotateEveryMessage
+        ? peers
+        : peers.filter((u) => this.dirtyUsers.has(u));
       if (stale.length > 0) {
         await this.machine.receiveSyncChanges(
           "[]",
@@ -630,8 +635,6 @@ export class CryptoEngine {
 
       const claim = await this.machine.getMissingSessions(users);
       if (claim) await this.sendKeysClaim(claim);
-
-      const policy = this.sharePolicy;
       const settings = new EncryptionSettings();
       settings.algorithm = EncryptionAlgorithm.MegolmV1AesSha2;
       settings.historyVisibility = mapHistoryVisibility(

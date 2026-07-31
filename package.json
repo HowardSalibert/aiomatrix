@@ -1,6 +1,6 @@
 {
   "name": "aiomatrix",
-  "version": "0.3.0",
+  "version": "0.3.1",
   "description": "Aiogram-like framework for Matrix bots: routers, filters, FSM, inline keyboards, E2EE and MiniApps",
   "type": "module",
   "main": "./dist/index.js",

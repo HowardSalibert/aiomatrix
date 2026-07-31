@@ -232,8 +232,11 @@ The contract the SDK enforces before dispatching anything, so a bot can never qu
 3. Room encryption state is resolved through the room cache. If the homeserver's answer is
    *unknown* (429, network error) the send throws `EncryptionStateUnknownError` instead of falling
    back to plaintext.
-4. Megolm sessions are shared with tracked peer devices, excluding the bot's own device, with the
-   share set cached and invalidated on device-list changes.
+4. Megolm sessions are shared with tracked peer devices, excluding the bot's own device.
+   Default `rotateEveryMessage: true` forces a fresh outbound session (and real to-device
+   share) on every encrypt so peers who wiped crypto still decrypt the **first** bot reply.
+   Large rooms may set `rotateEveryMessage: false` and rely on the share cache +
+   `reshareOnDeviceChange` (see options below).
 
 ```ts
 const bot = await Bot.create({
@@ -245,7 +248,7 @@ const bot = await Bot.create({
   keyBackup: true,
   encryption: {
     onlyAllowTrustedDevices: false, // bots normally can't verify anyone
-    rotateEveryMessage: false,
+    rotateEveryMessage: true, // default — set false only for large rooms
     rotationPeriodMessages: 100,
     reshareOnDeviceChange: true,
   },

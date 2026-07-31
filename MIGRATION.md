@@ -102,12 +102,13 @@ behaviour with `presence: "online"`.
 await Bot.create({ homeserverUrl: "http://matrix.internal", allowInsecureHomeserver: true });
 ```
 
-**`rotateEveryMessage` defaults to `false`.** In 0.2.x every encrypted message started a fresh Megolm
-session and re-shared it to every device in the room, which is why encrypted rooms were slow. If you
-depended on that (you almost certainly did not), set it explicitly:
+**`rotateEveryMessage` defaults to `true` again (0.3.1).** 0.3.0 briefly defaulted to `false` for
+share-cache performance, but that brought back undecryptable first replies after a peer crypto wipe
+(ciphertext only became readable after a later key exchange). The correct default for bots is
+`true`. Opt out only in large rooms:
 
 ```ts
-await Bot.create({ /* ... */, encryption: { rotateEveryMessage: true } });
+await Bot.create({ /* ... */, encryption: { rotateEveryMessage: false } });
 ```
 
 **Encryption state is no longer guessed.** When the homeserver cannot tell us whether a room is
