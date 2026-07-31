@@ -137,7 +137,7 @@ async function waitFor(predicate, timeoutMs = 2000) {
 }
 
 describe("SyncLoop", () => {
-  it("bootstraps with the no-timeline filter, then switches to runtime", async () => {
+  it("marks the first sync as bootstrap and keeps the runtime filter", async () => {
     const uploaded = [];
     let batch = 0;
     const { http } = scriptedHttp({
@@ -161,8 +161,8 @@ describe("SyncLoop", () => {
     await sync.waitUntilStopped();
 
     assert.deepEqual(rounds.slice(0, 2), [true, false], "first round is bootstrap");
-    assert.equal(uploaded[0].room.timeline.limit, 0);
-    assert.equal(uploaded[1].room.timeline.limit, 50);
+    assert.equal(uploaded.length, 1, "one filter upload");
+    assert.equal(uploaded[0].room.timeline.limit, 50);
   });
 
   it("persists next_batch and resumes from it", async () => {

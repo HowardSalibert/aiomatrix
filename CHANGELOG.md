@@ -16,6 +16,12 @@ semantic versioning.
   wiping `sync.json`, revoked access token → `onFatal`. Notes in `docs/LIVE_TESTS.md`.
 - **SECURITY.md** and CI `npm audit --omit=dev --audit-level=high`.
 
+### Fixed
+
+- **Cold start after wiping `sync.json` could re-dispatch recent room history.** Sync no longer
+  switches from a `timeline.limit: 0` filter to the runtime filter (Synapse replayed history on
+  that transition). The first sync is still marked bootstrap and is not fed to handlers.
+
 ## 0.3.1
 
 ### Fixed

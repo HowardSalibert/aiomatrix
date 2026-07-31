@@ -180,9 +180,10 @@ export interface SyncLoopOptions {
  * Long-poll `/sync` loop with `next_batch` persistence in `storagePath/sync.json`.
  *
  * Guarantees:
- * - a cold start never dispatches historical timeline events;
- * - the runtime filter upload is retried until it succeeds, so a transient
- *   failure cannot leave the bot pinned to the `timeline.limit: 0` filter;
+ * - a cold start (`since` absent / `bootstrap_done` false) never dispatches
+ *   timeline events into handlers — state/crypto still warm up;
+ * - one runtime filter only (no limit:0 → limit:N switch; that replayed history
+ *   on Synapse when the filter changed);
  * - backoff sleeps abort immediately on {@link stop};
  * - a batch that repeatedly breaks `onSync` is skipped instead of stalling.
  */
@@ -266,16 +267,12 @@ export class SyncLoop {
     while (!this.stopped) {
       try {
         const needBootstrap = state.next_batch == null || !state.bootstrap_done;
-        const wantKind: SyncFilterKind = needBootstrap ? "bootstrap" : "runtime";
+        // Always the runtime filter. A bootstrap→runtime filter switch made
+        // Synapse replay recent timelines into the first live sync.
+        const wantKind: SyncFilterKind = "runtime";
 
-        // (Re)upload the filter whenever the persisted one is the wrong kind.
-        // This is what keeps a failed runtime-filter upload from permanently
-        // pinning the bot to `timeline.limit: 0`.
         if (!state.filter_id || state.filter_kind !== wantKind) {
-          const filter =
-            wantKind === "bootstrap"
-              ? buildBootstrapFilter(this.filterOptions)
-              : buildRuntimeFilter(this.filterOptions);
+          const filter = buildRuntimeFilter(this.filterOptions);
           try {
             state.filter_id = await uploadFilter(this.http, this.userId, filter);
             state.filter_kind = wantKind;
@@ -283,8 +280,6 @@ export class SyncLoop {
             this.logger.debug(`uploaded ${wantKind} filter ${state.filter_id}`);
           } catch (err) {
             if (this.isAuthFatal(err)) throw err;
-            // Sync without a filter rather than with the wrong one: a slightly
-            // chattier sync is far better than a silently deaf bot.
             this.logger.warn(
               `${wantKind} filter upload failed; syncing without a filter this round`,
               err,
@@ -352,12 +347,6 @@ export class SyncLoop {
           ...(state.filter_id ? { filter_id: state.filter_id } : {}),
           ...(state.filter_kind ? { filter_kind: state.filter_kind } : {}),
         };
-        // After the bootstrap round the persisted kind is stale by definition;
-        // clearing it makes the next iteration install the runtime filter.
-        if (isBootstrap) {
-          delete state.filter_id;
-          delete state.filter_kind;
-        }
         saveSyncState(this.storagePath, state);
 
         this.lastSyncAt = Date.now();
