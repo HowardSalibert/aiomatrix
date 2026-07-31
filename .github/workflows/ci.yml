@@ -14,6 +14,10 @@ jobs:
   test:
     name: test (node ${{ matrix.node }} / ${{ matrix.os }})
     runs-on: ${{ matrix.os }}
+    # The suite finishes in seconds; anything longer means a handler or a sync
+    # loop is wedged. --test-timeout would be neater but it needs Node 20.11,
+    # and the library itself runs on 20.10.
+    timeout-minutes: 10
     strategy:
       fail-fast: false
       matrix:
