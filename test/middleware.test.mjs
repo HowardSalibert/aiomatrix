@@ -67,7 +67,7 @@ describe("throttle", () => {
   });
 
   it("starts a fresh window after it elapses", async () => {
-    const mw = throttle({ limit: 1, windowMs: 20 });
+    const mw = throttle({ limit: 1, windowMs: 300 });
     const harness = await messageContext("hi");
     let handled = 0;
     const call = async () => {
@@ -78,7 +78,7 @@ describe("throttle", () => {
     };
     await call();
     await call();
-    await tick(40);
+    await tick(400);
     await call();
     assert.equal(handled, 2);
   });

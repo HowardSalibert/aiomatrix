@@ -131,7 +131,7 @@ describe("sleep", () => {
     const start = Date.now();
     await sleep(0);
     await sleep(-5);
-    assert.ok(Date.now() - start < 20);
+    assert.ok(Date.now() - start < 500);
   });
 
   it("resolves early when the signal aborts", async () => {

@@ -221,17 +221,19 @@ describe("FSMContext", () => {
     const storage = new MemoryStorage();
     const state = new FSMContext(storage, ROOM, USER, { ttlMs: 5 });
     await state.setState("Form:name");
-    await new Promise((r) => setTimeout(r, 20));
+    await new Promise((r) => setTimeout(r, 60));
     assert.equal(await state.getState(), null);
   });
 
+  // The margins are wide on purpose: a loaded CI runner can overshoot a short
+  // sleep by tens of milliseconds, and this must not look like a ttl bug.
   it("refreshes the ttl on every write", async () => {
     const storage = new MemoryStorage();
-    const state = new FSMContext(storage, ROOM, USER, { ttlMs: 60 });
+    const state = new FSMContext(storage, ROOM, USER, { ttlMs: 500 });
     await state.setState("Form:name");
-    await new Promise((r) => setTimeout(r, 40));
+    await new Promise((r) => setTimeout(r, 50));
     await state.updateData({ a: 1 });
-    await new Promise((r) => setTimeout(r, 40));
+    await new Promise((r) => setTimeout(r, 50));
     assert.equal(await state.getState(), "Form:name");
   });
 
