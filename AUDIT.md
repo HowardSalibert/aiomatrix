@@ -215,25 +215,42 @@ Full-project sweep for bottlenecks, illogical behaviour, leaks, vulnerabilities,
 
 ### Testing
 
-580 tests over 121 suites, covering every module. Two test-harness bugs were fixed along the way: a
+Unit suite covers every module (see CI `test` job). Two test-harness bugs were fixed along the way: a
 mock `fetch` that resolved synchronously starved the microtask queue and hung the sync tests, and a
-`/sync` mock that returned immediately produced a busy loop instead of long-polling.
+`/sync` mock that returned immediately produced a busy loop instead of long-polling. Live Megolm /
+cold-start / revoked-token coverage is the Cycle 8 Synapse job.
 
 ### Cycle 7 residual
 
-- Live HS smoke remains human-only (see Cycle 5 residual).
 - MiniApp launch flow has no client-side integration test against a real Matrix client; the bridge is
   tested against a DOM stub.
 - Key backup is implemented but not exercised against a real backup version.
 
 ---
 
-## Final residual risks (human-only)
+## Cycle 8
 
-| Risk | Why code cannot close it |
+- Callback / MiniApp query tokens default to HMAC-signed forms (shared secret). Inject
+  `UsedTokenStore` / `asyncNonceStore` for multi-instance HTTP (`examples/redis-stores`).
+- Live Synapse job in CI: Megolm round-trip, cold `sync.json` wipe, revoked token → `onFatal`
+  (`docs/LIVE_TESTS.md`, `npm run test:live:ci`).
+- `SECURITY.md` + CI `npm audit --omit=dev --audit-level=high`.
+
+### External audit readiness
+
+Internal hardening is in this file and in CI. An independent review is still unpaid/unscheduled —
+see [SECURITY.md](./SECURITY.md) for reporting. Useful audit package: this log, SECURITY.md, live CI
+green, surface list (`crypto.ts`, `crypto-guard.ts`, MiniApp HMAC, callback tokens, HTML trust).
+
+---
+
+## Final residual risks
+
+| Risk | Status |
 |---|---|
-| History flood on real HS | Needs populated rooms + cold `sync.json` wipe |
-| Megolm decrypt with peers | Needs second device / user |
-| Autojoin ACL / knock rooms | Server policy dependent |
-| Token expiry mid-run | Needs revoked token |
-| Key backup | Not in product scope; requests marked sent to avoid stall |
+| History flood on real HS | Covered by live cold-start test |
+| Megolm decrypt with peers | Covered by live Megolm round-trip |
+| Token expiry mid-run | Covered by live revoked-token test |
+| Autojoin ACL / knock rooms | Still server-policy dependent (human) |
+| Key backup against a real backup version | Not in product scope; requests marked sent |
+| Independent third-party security audit | Not a code deliverable; reporting channel in SECURITY.md |

@@ -2,9 +2,12 @@ import type { Bot } from "./bot.js";
 import type { MatrixClient } from "./client.js";
 import type { CommandObject } from "./commands.js";
 import type { FSMContext, Storage } from "./fsm.js";
-import type { InlineKeyboard } from "./keyboards.js";
+import type { CallbackTokenStore, InlineKeyboard } from "./keyboards.js";
 import type { Logger } from "./logger.js";
+import type { AsyncNonceStore, NonceStore } from "./miniapp/initdata.js";
+import type { MiniAppQueryStore } from "./miniapp/query.js";
 import type { Membership, PowerLevels } from "./room-cache.js";
+import type { UsedTokenStore } from "./token-store.js";
 
 /** Any Matrix event as delivered by `/sync` (subset that is always present). */
 export interface MatrixEvent {
@@ -323,6 +326,7 @@ export interface MiniAppOptions {
   /**
    * Secret used to sign MiniApp `initData`. Anything with >=32 bytes of entropy.
    * Required to enable signed launches; keep it out of the mini app bundle.
+   * Also used as the default HMAC secret for signed callback / query tokens.
    */
   secret?: string;
   /** Origins allowed to host mini apps for this bot (`https://app.example.org`). */
@@ -331,8 +335,19 @@ export interface MiniAppOptions {
   defaultUrl?: string;
   /** `initData` lifetime in seconds. Default 3600. */
   initDataTtlSeconds?: number;
-  /** Keep answered/expired query ids for replay protection. Default 4096. */
+  /** Keep answered/expired query ids for replay protection (memory registry). Default 4096. */
   queryCacheSize?: number;
+  /**
+   * Shared claim/revoke store for signed MiniApp query ids.
+   * Required for single-answer semantics across processes.
+   */
+  queryUsedStore?: UsedTokenStore;
+  /** Shared launch nonce store for MiniAppServer (single-process sync API). */
+  nonceStore?: NonceStore;
+  /** Redis-style atomic nonce store for multi-instance MiniApp HTTP. */
+  asyncNonceStore?: AsyncNonceStore;
+  /** Inject a custom query registry (defaults to signed HMAC registry). */
+  queries?: MiniAppQueryStore;
 }
 
 export interface RetryOptions {
@@ -403,6 +418,15 @@ export interface BotCreateOptions {
   handlerTimeoutMs?: number;
   /** MiniApp platform configuration. */
   miniApp?: MiniAppOptions;
+  /**
+   * Callback token registry. Default: HMAC-signed tokens using `callbackSecret`
+   * or the MiniApp secret. Pass `new CallbackRegistry()` for process-local opaque tokens.
+   */
+  callbacks?: CallbackTokenStore;
+  /** HMAC secret for signed callback tokens. Defaults to the MiniApp secret. */
+  callbackSecret?: string;
+  /** Shared single-use/revoke store for signed callback tokens. */
+  callbackUsedStore?: UsedTokenStore;
   /** How FSM state is scoped and namespaced. */
   fsm?: { strategy?: FsmStrategy; namespace?: string; ttlMs?: number };
   /** Called when syncing dies unrecoverably (invalid token, revoked device). */

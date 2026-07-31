@@ -152,12 +152,9 @@ export interface ValidateInitDataOptions {
   ttlSeconds?: number;
   /**
    * Reject a `nonce` that was already used. Supply a shared store to make
-   * launches strictly single-use.
+   * launches strictly single-use across processes.
    */
-  nonceStore?: {
-    has(nonce: string): boolean;
-    add(nonce: string): void;
-  };
+  nonceStore?: NonceStore;
   /** Override the clock (tests). */
   nowMs?: number;
 }
@@ -278,8 +275,23 @@ export function validateInitData(
   };
 }
 
+/** Single-use launch nonces. Inject a shared adapter when scaling MiniApp HTTP. */
+export interface NonceStore {
+  has(nonce: string): boolean;
+  add(nonce: string): void;
+}
+
+/**
+ * Atomic nonce claim for async backends (Redis SET NX).
+ * Prefer this over {@link NonceStore} when MiniApp HTTP is multi-instance.
+ */
+export interface AsyncNonceStore {
+  /** `true` if this call recorded the nonce; `false` if it was already used. */
+  tryAdd(nonce: string): Promise<boolean>;
+}
+
 /** Bounded in-memory nonce store for single-use launch protection. */
-export class MemoryNonceStore {
+export class MemoryNonceStore implements NonceStore {
   private readonly seen = new Map<string, number>();
 
   constructor(

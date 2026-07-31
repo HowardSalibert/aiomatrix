@@ -78,6 +78,7 @@ export {
   CALLBACK_EVENT_TYPE,
   CALLBACK_FALLBACK_COMMAND,
   CallbackRegistry,
+  SignedCallbackRegistry,
   InlineKeyboard,
   isSafeButtonUrl,
   KEYBOARD_CONTENT_KEY,
@@ -89,12 +90,17 @@ export {
 } from "./keyboards.js";
 export type {
   ButtonStyle,
+  CallbackIssueParams,
   CallbackRegistryOptions,
   CallbackTokenRecord,
+  CallbackTokenStore,
   InlineButton,
   KeyboardContent,
   KeyboardFallback,
+  SignedCallbackRegistryOptions,
 } from "./keyboards.js";
+export { MemoryUsedTokenStore } from "./token-store.js";
+export type { UsedTokenStore } from "./token-store.js";
 
 // --------------------------------------------------------------------- HTML
 export { MATRIX_ALLOWED_TAGS, fmt, html, sanitizeMatrixHtml } from "./html.js";
@@ -199,8 +205,10 @@ export {
   assertDeviceIdMatch,
   assertOwnDeviceKeysReady,
   assertPeersHaveKeys,
+  countDevicesForUser,
   guardedSendHtml,
   guardedSendText,
+  hasOwnDeviceKeys,
   isLikelyBotUserId,
   queryDeviceKeys,
 } from "./crypto-guard.js";

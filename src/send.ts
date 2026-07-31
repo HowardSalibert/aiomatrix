@@ -2,7 +2,7 @@ import { htmlToPlainBody, type MatrixClient } from "./client.js";
 import {
   KEYBOARD_CONTENT_KEY,
   renderKeyboardFallback,
-  type CallbackRegistry,
+  type CallbackTokenStore,
   type InlineKeyboard,
   type KeyboardContent,
 } from "./keyboards.js";
@@ -19,8 +19,8 @@ export interface MessageSource {
 export interface SendTarget {
   client: MatrixClient;
   roomId: string;
-  /** Registry used to mint opaque callback tokens for keyboard buttons. */
-  callbacks?: CallbackRegistry;
+  /** Registry used to mint callback tokens for keyboard buttons. */
+  callbacks?: CallbackTokenStore;
   /** Event id used when `replyTo: true`. */
   triggerEventId?: string | null;
   /** Thread root used when `thread: true`. */

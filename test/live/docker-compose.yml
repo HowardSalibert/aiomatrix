@@ -1,0 +1,20 @@
+# Local Synapse for aiomatrix live tests. Not for production.
+services:
+  synapse:
+    image: matrixdotorg/synapse:latest
+    environment:
+      SYNAPSE_SERVER_NAME: localhost
+      SYNAPSE_REPORT_STATS: "no"
+    volumes:
+      - synapse-data:/data
+    ports:
+      - "8008:8008"
+    healthcheck:
+      test: ["CMD", "curl", "-fSs", "http://localhost:8008/health"]
+      interval: 5s
+      timeout: 5s
+      retries: 30
+      start_period: 15s
+
+volumes:
+  synapse-data:

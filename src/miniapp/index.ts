@@ -39,16 +39,23 @@ export {
   validateInitData,
 } from "./initdata.js";
 export type {
+  AsyncNonceStore,
   MiniAppInitDataPayload,
   MiniAppRoom,
   MiniAppUser,
+  NonceStore,
   SignedInitData,
   ValidateInitDataOptions,
   ValidatedInitData,
 } from "./initdata.js";
 
-export { MiniAppQueryRegistry } from "./query.js";
-export type { MiniAppQueryRecord } from "./query.js";
+export { MiniAppQueryRegistry, SignedMiniAppQueryRegistry } from "./query.js";
+export type {
+  MiniAppQueryIssueParams,
+  MiniAppQueryRecord,
+  MiniAppQueryStore,
+  SignedMiniAppQueryRegistryOptions,
+} from "./query.js";
 
 export { MiniAppServer, createSessionToken, verifySessionToken } from "./server.js";
 export type {

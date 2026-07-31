@@ -3,6 +3,19 @@
 All notable changes to this project. Format loosely follows [Keep a Changelog]; the project uses
 semantic versioning.
 
+## Unreleased
+
+### Added
+
+- **Signed callback / MiniApp query tokens by default.** `SignedCallbackRegistry` and
+  `SignedMiniAppQueryRegistry` use the MiniApp (or `callbackSecret`) HMAC secret so any process
+  with that secret can resolve them. Inject `callbackUsedStore` / `miniApp.queryUsedStore` /
+  `miniApp.asyncNonceStore` for single-use semantics across instances; see `examples/redis-stores`.
+  Pass `new CallbackRegistry()` / `new MiniAppQueryRegistry()` for the old process-local Maps.
+- **Live Synapse CI** (`test/live`, `npm run test:live:ci`): Megolm round-trip, cold start after
+  wiping `sync.json`, revoked access token → `onFatal`. Notes in `docs/LIVE_TESTS.md`.
+- **SECURITY.md** and CI `npm audit --omit=dev --audit-level=high`.
+
 ## 0.3.1
 
 ### Fixed

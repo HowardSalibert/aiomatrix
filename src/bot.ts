@@ -23,7 +23,8 @@ import { ConfigurationError, DeviceMismatchError, MiniAppAuthError } from "./err
 import {
   CALLBACK_EVENT_TYPE,
   CALLBACK_FALLBACK_COMMAND,
-  CallbackRegistry,
+  SignedCallbackRegistry,
+  type CallbackTokenStore,
   InlineKeyboard,
 } from "./keyboards.js";
 import { createDefaultLogger, type Logger, type LogLevel } from "./logger.js";
@@ -41,7 +42,7 @@ import {
   type MiniAppUser,
   type SignedInitData,
 } from "./miniapp/initdata.js";
-import { MiniAppQueryRegistry } from "./miniapp/query.js";
+import { SignedMiniAppQueryRegistry, type MiniAppQueryStore } from "./miniapp/query.js";
 import { MiniAppServer, type MiniAppServerOptions, type MiniAppSession } from "./miniapp/server.js";
 import {
   WIDGET_STATE_EVENT_TYPE,
@@ -156,9 +157,9 @@ export class Bot {
   readonly cryptoEnabled: boolean;
   readonly logger: Logger;
   /** Inline keyboard callback tokens. */
-  readonly callbacks: CallbackRegistry;
+  readonly callbacks: CallbackTokenStore;
   /** In-flight MiniApp launches awaiting a `sendData` round trip. */
-  readonly miniAppQueries: MiniAppQueryRegistry;
+  readonly miniAppQueries: MiniAppQueryStore;
   /** Commands advertised by `/help` and to clients. */
   readonly commands = new CommandRegistry();
   readonly scheduler: Scheduler;
@@ -189,14 +190,29 @@ export class Bot {
     if (params.configuredDeviceId !== undefined) {
       this.configuredDeviceId = params.configuredDeviceId;
     }
-    this.callbacks = new CallbackRegistry();
-    this.miniAppQueries = new MiniAppQueryRegistry(params.options.miniApp?.queryCacheSize ?? 4_096);
     this.scheduler = new Scheduler({ logger: params.logger });
     this.miniAppSecret = resolveMiniAppSecret(
       params.storagePath,
       params.options.miniApp?.secret,
       this.logger,
     );
+    const callbackSecret = params.options.callbackSecret ?? this.miniAppSecret;
+    this.callbacks =
+      params.options.callbacks ??
+      new SignedCallbackRegistry({
+        secret: callbackSecret,
+        ...(params.options.callbackUsedStore
+          ? { used: params.options.callbackUsedStore }
+          : {}),
+      });
+    this.miniAppQueries =
+      params.options.miniApp?.queries ??
+      new SignedMiniAppQueryRegistry({
+        secret: this.miniAppSecret,
+        ...(params.options.miniApp?.queryUsedStore
+          ? { used: params.options.miniApp.queryUsedStore }
+          : {}),
+      });
     this.miniAppAllowedOrigins = [...(params.options.miniApp?.allowedOrigins ?? [])];
     if (params.options.miniApp?.defaultUrl && this.miniAppAllowedOrigins.length === 0) {
       try {
@@ -483,7 +499,7 @@ export class Bot {
     token: string,
     roomId: string,
     senderId: string | undefined,
-  ): ReturnType<CallbackRegistry["resolve"]> {
+  ): ReturnType<CallbackTokenStore["resolve"]> {
     const record = this.callbacks.resolve(token, senderId);
     if (!record) return null;
     if (record.roomId !== roomId) {
@@ -706,6 +722,12 @@ export class Bot {
       allowedOrigins: options.allowedOrigins ?? this.miniAppAllowedOrigins,
       ...(this.options.miniApp?.initDataTtlSeconds !== undefined
         ? { initDataTtlSeconds: this.options.miniApp.initDataTtlSeconds }
+        : {}),
+      ...(this.options.miniApp?.nonceStore
+        ? { nonceStore: this.options.miniApp.nonceStore }
+        : {}),
+      ...(this.options.miniApp?.asyncNonceStore
+        ? { asyncNonceStore: this.options.miniApp.asyncNonceStore }
         : {}),
       ...options,
       onData:

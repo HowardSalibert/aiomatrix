@@ -296,6 +296,8 @@ Full walkthrough, protocol details, and a client example: [MINIAPP.md](./MINIAPP
 
 ## Security notes
 
+Report vulnerabilities privately: [SECURITY.md](./SECURITY.md). Hardening log: [AUDIT.md](./AUDIT.md).
+
 - **HTML is a trust boundary.** `ctx.reply(text)` is plain text and always safe. `ctx.replyHtml`
   sends HTML; run untrusted input through `sanitizeMatrixHtml()`, or build it with the `html`
   tagged template, which escapes interpolations for you.
@@ -305,6 +307,9 @@ Full walkthrough, protocol details, and a client example: [MINIAPP.md](./MINIAPP
   reach the logger, at any level.
 - **Storage holds credentials.** `storagePath` contains the session, device id, crypto store, and
   MiniApp secret. Keep it out of version control and off shared volumes.
+- **One sync + crypto writer per device.** Callback and MiniApp query tokens are HMAC-signed by
+  default (shared secret). Scale MiniApp HTTP with a shared secret and a shared nonce/used-token
+  store — see `examples/redis-stores`. Do not run two syncers against the same crypto store.
 
 ## Operations
 
@@ -348,6 +353,8 @@ import { validateInitData } from "aiomatrix/miniapp";
 ## Docs
 
 - [MINIAPP.md](./MINIAPP.md) — MiniApp protocol, bridge API, backend, widgets
+- [docs/LIVE_TESTS.md](./docs/LIVE_TESTS.md) — Synapse Docker live E2EE tests
+- [SECURITY.md](./SECURITY.md) — vulnerability reporting
 - [CHANGELOG.md](./CHANGELOG.md)
 - [AUDIT.md](./AUDIT.md) — hardening cycles and residual risks
 

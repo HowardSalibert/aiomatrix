@@ -5,8 +5,10 @@ import { serveMiniAppBridge } from "./bridge.js";
 import {
   MemoryNonceStore,
   validateInitData,
+  type AsyncNonceStore,
   type MiniAppRoom,
   type MiniAppUser,
+  type NonceStore,
   type ValidatedInitData,
 } from "./initdata.js";
 
@@ -103,6 +105,13 @@ export interface MiniAppServerOptions {
   sessionTtlSeconds?: number;
   /** Reject reused launches. Default true. */
   singleUseLaunch?: boolean;
+  /**
+   * Launch nonce store. Default is process-local {@link MemoryNonceStore}.
+   * For multi-instance HTTP prefer {@link asyncNonceStore} (Redis SET NX).
+   */
+  nonceStore?: NonceStore;
+  /** Atomic async nonce claim; wins over {@link nonceStore} when both are set. */
+  asyncNonceStore?: AsyncNonceStore;
   /** Base path the routes are mounted under. Default `/`. */
   basePath?: string;
   /**
@@ -125,7 +134,7 @@ const JSON_HEADERS = { "content-type": "application/json; charset=utf-8" };
  * the bot — without depending on Express, Fastify, or Node's `http` module.
  */
 export class MiniAppServer {
-  private readonly nonceStore: MemoryNonceStore | null;
+  private readonly nonceStore: NonceStore | null;
   private readonly basePath: string;
 
   constructor(private readonly options: MiniAppServerOptions) {
@@ -135,19 +144,63 @@ export class MiniAppServer {
         "malformed",
       );
     }
-    this.nonceStore = options.singleUseLaunch === false ? null : new MemoryNonceStore();
+    if (options.singleUseLaunch === false) {
+      this.nonceStore = null;
+    } else if (options.asyncNonceStore) {
+      this.nonceStore = options.nonceStore ?? null;
+    } else {
+      this.nonceStore = options.nonceStore ?? new MemoryNonceStore();
+    }
     const base = (options.basePath ?? "/").replace(/\/+$/, "");
     this.basePath = base;
   }
 
   /** Validate a launch and mint a session token. */
   authenticate(initData: string): MiniAppAuthResult {
+    if (this.options.asyncNonceStore && this.options.singleUseLaunch !== false) {
+      throw new MiniAppAuthError(
+        "asyncNonceStore requires authenticateAsync()",
+        "malformed",
+      );
+    }
     const validated = validateInitData(initData, this.options.secret, {
       ...(this.options.initDataTtlSeconds !== undefined
         ? { ttlSeconds: this.options.initDataTtlSeconds }
         : {}),
       ...(this.nonceStore ? { nonceStore: this.nonceStore } : {}),
     });
+    return this.mintSession(validated);
+  }
+
+  /**
+   * Like {@link authenticate}, but records the launch nonce through
+   * {@link MiniAppServerOptions.asyncNonceStore} when configured.
+   */
+  async authenticateAsync(initData: string): Promise<MiniAppAuthResult> {
+    const asyncStore =
+      this.options.singleUseLaunch === false ? null : (this.options.asyncNonceStore ?? null);
+    if (!asyncStore) return this.authenticate(initData);
+
+    const validated = validateInitData(initData, this.options.secret, {
+      ...(this.options.initDataTtlSeconds !== undefined
+        ? { ttlSeconds: this.options.initDataTtlSeconds }
+        : {}),
+      // Nonce checked atomically below.
+    });
+    if (!validated.nonce) {
+      throw new MiniAppAuthError(
+        "initData has no nonce but replay protection is enabled",
+        "malformed",
+      );
+    }
+    const claimed = await asyncStore.tryAdd(validated.nonce);
+    if (!claimed) {
+      throw new MiniAppAuthError("initData nonce was already used", "replayed");
+    }
+    return this.mintSession(validated);
+  }
+
+  private mintSession(validated: ValidatedInitData): MiniAppAuthResult {
     const ttl = this.options.sessionTtlSeconds ?? 3600;
     const token = createSessionToken(
       {
@@ -200,7 +253,9 @@ export class MiniAppServer {
       const body = parseBody(request.body);
       const initData = typeof body.initData === "string" ? body.initData : "";
       try {
-        const result = this.authenticate(initData);
+        const result = this.options.asyncNonceStore
+          ? await this.authenticateAsync(initData)
+          : this.authenticate(initData);
         return this.json(
           200,
           {

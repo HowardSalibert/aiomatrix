@@ -247,7 +247,10 @@ What the signature buys you, and what it doesn't:
 - **Time-boxed.** `auth_date` plus `initDataTtlSeconds` (default 1 hour) bound how long a captured
   launch stays usable.
 - **Single-use.** Each launch carries a nonce; `MiniAppServer` rejects a second `/auth` with the same
-  one. Set `singleUseLaunch: false` only if you truly need reloads to re-authenticate.
+  one. Set `singleUseLaunch: false` only if you truly need reloads to re-authenticate. With several
+  HTTP workers, pass `asyncNonceStore` (Redis SET NX — `examples/redis-stores`) so the check is
+  global; the default store is process-local.
+
 - **Origin-pinned.** The bridge posts only to the window that launched it, and only to
   `matrixWebAppHost` when that is set. Messages from other windows or origins are ignored, so a rogue
   frame cannot harvest `sendData` payloads.

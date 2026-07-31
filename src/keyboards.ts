@@ -1,4 +1,9 @@
-import { escapeHtml, isPlainObject, randomId, readString } from "./util.js";
+import * as crypto from "node:crypto";
+import {
+  MemoryUsedTokenStore,
+  type UsedTokenStore,
+} from "./token-store.js";
+import { escapeHtml, isPlainObject, randomId, readString, timingSafeEqualStrings } from "./util.js";
 
 /** Content field carrying a aiomatrix inline keyboard. */
 export const KEYBOARD_CONTENT_KEY = "dev.aiomatrix.keyboard";
@@ -333,6 +338,29 @@ export interface CallbackTokenRecord {
   singleUse: boolean;
 }
 
+export interface CallbackIssueParams {
+  data: string;
+  roomId: string;
+  messageEventId?: string | null;
+  userId?: string | null;
+  ttlMs?: number;
+  singleUse?: boolean;
+}
+
+/** Mint / resolve opaque or signed callback tokens. */
+export interface CallbackTokenStore {
+  issue(params: CallbackIssueParams): string;
+  bindMessage(tokens: readonly string[], messageEventId: string): void;
+  bind(tokens: readonly string[], messageEventId: string): void;
+  peek(token: string, now?: number): CallbackTokenRecord | null;
+  resolve(token: string, userId?: string, now?: number): CallbackTokenRecord | null;
+  markAnswered(token: string): void;
+  revoke(token: string): void;
+  revokeForMessage(messageEventId: string): void;
+  readonly size: number;
+  clear(): void;
+}
+
 export interface CallbackRegistryOptions {
   /** Tokens kept in memory before the oldest are evicted. */
   maxEntries?: number;
@@ -344,9 +372,10 @@ export interface CallbackRegistryOptions {
  * Short-lived registry mapping opaque button tokens to callback payloads.
  *
  * Tokens (not the payload) travel through the fallback text command, so a user
- * cannot forge arbitrary callback data by typing `!cb …`.
+ * cannot forge arbitrary callback data by typing `!cb …`. Process-local only —
+ * use {@link SignedCallbackRegistry} when several bot processes share a secret.
  */
-export class CallbackRegistry {
+export class CallbackRegistry implements CallbackTokenStore {
   private readonly tokens = new Map<string, CallbackTokenRecord>();
   private readonly capacity: number;
   private readonly ttlMs: number;
@@ -357,14 +386,7 @@ export class CallbackRegistry {
   }
 
   /** Issue a token for a callback button. */
-  issue(params: {
-    data: string;
-    roomId: string;
-    messageEventId?: string | null;
-    userId?: string | null;
-    ttlMs?: number;
-    singleUse?: boolean;
-  }): string {
+  issue(params: CallbackIssueParams): string {
     this.prune();
     // 16 bytes: tokens travel through the plain-text fallback, so they must not
     // be guessable by anyone who can read the room.
@@ -449,5 +471,194 @@ export class CallbackRegistry {
       if (oldest.done) break;
       this.tokens.delete(oldest.value);
     }
+  }
+}
+
+interface SignedCallbackPayload {
+  d: string;
+  r: string;
+  u?: string;
+  e: number;
+  s: boolean;
+  n: string;
+}
+
+export interface SignedCallbackRegistryOptions {
+  /** HMAC secret shared by every process that must resolve these tokens. */
+  secret: string;
+  ttlMs?: number;
+  /**
+   * Single-use consumption and revoke blacklist.
+   * Share across instances (e.g. Redis) when `singleUse` must be global.
+   */
+  used?: UsedTokenStore;
+}
+
+/**
+ * HMAC-signed callback tokens. Any process with the same secret can resolve them;
+ * only `bindMessage` / local answered flags stay process-local unless `used` is shared.
+ */
+export class SignedCallbackRegistry implements CallbackTokenStore {
+  private readonly secret: string;
+  private readonly ttlMs: number;
+  private readonly used: UsedTokenStore;
+  /** Local message-id bindings and answered flags keyed by full token. */
+  private readonly side = new Map<string, { messageEventId: string; answered: boolean }>();
+  private readonly byMessage = new Map<string, Set<string>>();
+
+  constructor(options: SignedCallbackRegistryOptions) {
+    if (!options.secret || options.secret.length < 16) {
+      throw new TypeError("SignedCallbackRegistry requires a secret of at least 16 characters");
+    }
+    this.secret = options.secret;
+    this.ttlMs = Math.max(1, options.ttlMs ?? 24 * 60 * 60 * 1000);
+    this.used = options.used ?? new MemoryUsedTokenStore();
+  }
+
+  issue(params: CallbackIssueParams): string {
+    const ttl = params.ttlMs ?? this.ttlMs;
+    const payload: SignedCallbackPayload = {
+      d: params.data,
+      r: params.roomId,
+      e: Date.now() + ttl,
+      s: params.singleUse ?? false,
+      n: randomId(8),
+    };
+    if (params.userId) payload.u = params.userId;
+    const token = signCallbackToken(payload, this.secret);
+    const messageEventId = params.messageEventId ?? "";
+    this.side.set(token, { messageEventId, answered: false });
+    if (messageEventId) this.trackMessage(token, messageEventId);
+    return token;
+  }
+
+  bindMessage(tokens: readonly string[], messageEventId: string): void {
+    for (const token of tokens) {
+      const local = this.side.get(token) ?? { messageEventId: "", answered: false };
+      local.messageEventId = messageEventId;
+      this.side.set(token, local);
+      this.trackMessage(token, messageEventId);
+    }
+  }
+
+  bind(tokens: readonly string[], messageEventId: string): void {
+    this.bindMessage(tokens, messageEventId);
+  }
+
+  peek(token: string, now = Date.now()): CallbackTokenRecord | null {
+    if (this.used.has(deadKey(token))) return null;
+    const payload = verifyCallbackToken(token, this.secret);
+    if (!payload) return null;
+    if (payload.e <= now) return null;
+    const local = this.side.get(token);
+    const record: CallbackTokenRecord = {
+      data: payload.d,
+      roomId: payload.r,
+      messageEventId: local?.messageEventId ?? "",
+      expiresAtMs: payload.e,
+      answered: local?.answered ?? this.used.has(answeredKey(token)),
+      singleUse: payload.s,
+    };
+    if (payload.u) record.userId = payload.u;
+    return record;
+  }
+
+  resolve(token: string, userId?: string, now = Date.now()): CallbackTokenRecord | null {
+    const record = this.peek(token, now);
+    if (!record) return null;
+    if (record.userId && userId && record.userId !== userId) return null;
+    if (record.singleUse) {
+      const ttl = Math.max(1, record.expiresAtMs - now);
+      if (this.used.tryAdd) {
+        if (!this.used.tryAdd(deadKey(token), ttl)) return null;
+      } else {
+        this.used.add(deadKey(token), ttl);
+      }
+    }
+    return record;
+  }
+
+  markAnswered(token: string): void {
+    const local = this.side.get(token) ?? { messageEventId: "", answered: false };
+    local.answered = true;
+    this.side.set(token, local);
+    const record = this.peek(token);
+    const ttl = record ? Math.max(1, record.expiresAtMs - Date.now()) : this.ttlMs;
+    this.used.add(answeredKey(token), ttl);
+  }
+
+  revoke(token: string): void {
+    this.used.add(deadKey(token), this.ttlMs);
+    const local = this.side.get(token);
+    if (local?.messageEventId) {
+      this.byMessage.get(local.messageEventId)?.delete(token);
+    }
+    this.side.delete(token);
+  }
+
+  revokeForMessage(messageEventId: string): void {
+    const tokens = this.byMessage.get(messageEventId);
+    if (!tokens) return;
+    for (const token of [...tokens]) this.revoke(token);
+    this.byMessage.delete(messageEventId);
+  }
+
+  get size(): number {
+    return this.side.size;
+  }
+
+  clear(): void {
+    this.side.clear();
+    this.byMessage.clear();
+  }
+
+  private trackMessage(token: string, messageEventId: string): void {
+    let set = this.byMessage.get(messageEventId);
+    if (!set) {
+      set = new Set();
+      this.byMessage.set(messageEventId, set);
+    }
+    set.add(token);
+  }
+}
+
+function deadKey(token: string): string {
+  return `cb:dead:${token}`;
+}
+
+function answeredKey(token: string): string {
+  return `cb:ans:${token}`;
+}
+
+function signCallbackToken(payload: SignedCallbackPayload, secret: string): string {
+  const encoded = Buffer.from(JSON.stringify(payload), "utf8").toString("base64url");
+  const mac = crypto.createHmac("sha256", secret).update(encoded).digest("base64url");
+  return `${encoded}.${mac}`;
+}
+
+function verifyCallbackToken(token: string, secret: string): SignedCallbackPayload | null {
+  const dot = token.lastIndexOf(".");
+  if (dot <= 0) return null;
+  const encoded = token.slice(0, dot);
+  const mac = token.slice(dot + 1);
+  const expected = crypto.createHmac("sha256", secret).update(encoded).digest("base64url");
+  if (!timingSafeEqualStrings(mac, expected)) return null;
+  try {
+    const parsed = JSON.parse(Buffer.from(encoded, "base64url").toString("utf8")) as unknown;
+    if (!isPlainObject(parsed)) return null;
+    if (typeof parsed.d !== "string" || typeof parsed.r !== "string") return null;
+    if (typeof parsed.e !== "number" || typeof parsed.s !== "boolean") return null;
+    if (typeof parsed.n !== "string") return null;
+    const out: SignedCallbackPayload = {
+      d: parsed.d,
+      r: parsed.r,
+      e: parsed.e,
+      s: parsed.s,
+      n: parsed.n,
+    };
+    if (typeof parsed.u === "string") out.u = parsed.u;
+    return out;
+  } catch {
+    return null;
   }
 }

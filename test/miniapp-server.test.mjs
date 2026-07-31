@@ -77,6 +77,35 @@ describe("MiniAppServer", () => {
     assert.equal(JSON.parse(second.body).error, "replayed");
   });
 
+  it("uses asyncNonceStore for single-use launches", async () => {
+    const seen = new Set();
+    const app = server({
+      asyncNonceStore: {
+        async tryAdd(nonce) {
+          if (seen.has(nonce)) return false;
+          seen.add(nonce);
+          return true;
+        },
+      },
+    });
+    const initData = launch().initData;
+    const first = await app.handle({
+      method: "POST",
+      url: "/auth",
+      headers: { origin: ORIGIN },
+      body: { initData },
+    });
+    assert.equal(first.status, 200);
+    const second = await app.handle({
+      method: "POST",
+      url: "/auth",
+      headers: { origin: ORIGIN },
+      body: { initData },
+    });
+    assert.equal(second.status, 401);
+    assert.equal(JSON.parse(second.body).error, "replayed");
+  });
+
   it("blocks requests from origins outside the allowlist", async () => {
     const app = server();
     const res = await app.handle({

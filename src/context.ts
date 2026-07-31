@@ -1,7 +1,7 @@
 import type { Bot } from "./bot.js";
 import type { MatrixClient } from "./client.js";
 import { FSMContext, type Storage } from "./fsm.js";
-import type { CallbackRegistry, InlineKeyboard } from "./keyboards.js";
+import type { CallbackTokenStore, InlineKeyboard } from "./keyboards.js";
 import type { Logger } from "./logger.js";
 import { readAttachmentFromContent } from "./media.js";
 import type { Membership, PowerLevels } from "./room-cache.js";
@@ -34,7 +34,7 @@ export interface ContextDeps {
   client: MatrixClient;
   logger: Logger;
   storage: Storage;
-  callbacks: CallbackRegistry;
+  callbacks: CallbackTokenStore;
   fsm?: { strategy?: FsmStrategy; namespace?: string; ttlMs?: number };
 }
 
