@@ -22,8 +22,7 @@ semantic versioning.
 ## 0.3.0
 
 A near-total rework toward the aiogram feature set, plus the MiniApp platform. The message-handling
-basics are unchanged, but routing, contexts, and the client surface grew substantially. See
-[MIGRATION.md](./MIGRATION.md).
+basics are unchanged, but routing, contexts, and the client surface grew substantially.
 
 ### Renamed
 

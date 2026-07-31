@@ -347,7 +347,6 @@ import { validateInitData } from "aiomatrix/miniapp";
 ## Docs
 
 - [MINIAPP.md](./MINIAPP.md) — MiniApp protocol, bridge API, backend, widgets
-- [MIGRATION.md](./MIGRATION.md) — upgrading from 0.2.x
 - [CHANGELOG.md](./CHANGELOG.md)
 - [AUDIT.md](./AUDIT.md) — hardening cycles and residual risks
 
