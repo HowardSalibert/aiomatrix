@@ -5,7 +5,8 @@ Megolm round-trip, cold start, and revoked-token behaviour against a real Synaps
 ## CI
 
 The `live` job in `.github/workflows/ci.yml` runs `npm run test:live:ci` on Ubuntu
-(Docker Synapse + Node 22).
+(Docker Synapse + Node 22). Suites share one bot/peer session storage and Synapse
+login rate limits are relaxed for the ephemeral homeserver.
 
 ## Local
 

@@ -4,6 +4,7 @@
  */
 import { spawn, execFileSync } from "node:child_process";
 import * as fs from "node:fs";
+import * as os from "node:os";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -87,6 +88,41 @@ async function waitForHomeserver(url, attempts = 90) {
   throw new Error(`homeserver not ready at ${url}`);
 }
 
+/** Relax Synapse login throttling so sequential suites do not 429 on /login. */
+function relaxLoginRateLimits() {
+  const patch = `
+## aiomatrix live tests — relax login throttling
+rc_login:
+  address:
+    per_second: 1000
+    burst_count: 1000
+  account:
+    per_second: 1000
+    burst_count: 1000
+  failed_attempts:
+    per_second: 1000
+    burst_count: 1000
+`;
+  console.log("+ patch homeserver.yaml rc_login");
+  execFileSync(
+    "docker",
+    [
+      "compose",
+      "-f",
+      composeFile,
+      "run",
+      "--rm",
+      "-T",
+      "--entrypoint",
+      "sh",
+      "synapse",
+      "-c",
+      'grep -q "aiomatrix live tests" /data/homeserver.yaml 2>/dev/null || cat >> /data/homeserver.yaml',
+    ],
+    { cwd: root, input: patch, stdio: ["pipe", "inherit", "inherit"] },
+  );
+}
+
 async function main() {
   if (!fs.existsSync(composeFile)) {
     throw new Error(`missing ${composeFile}`);
@@ -96,6 +132,9 @@ async function main() {
     .readdirSync(liveDir)
     .filter((name) => name.endsWith(".test.mjs"))
     .map((name) => path.join("test/live", name));
+
+  const botStorage = fs.mkdtempSync(path.join(os.tmpdir(), "aio-live-bot-"));
+  const peerStorage = fs.mkdtempSync(path.join(os.tmpdir(), "aio-live-peer-"));
 
   let exitCode = 1;
   try {
@@ -113,6 +152,7 @@ async function main() {
       "synapse",
       "generate",
     ]);
+    relaxLoginRateLimits();
     run("docker", ["compose", "-f", composeFile, "up", "-d"]);
     await waitForHomeserver(hsUrl);
 
@@ -126,6 +166,9 @@ async function main() {
       MATRIX_BOT_PASSWORD: botPass,
       MATRIX_PEER_USER: `@${peerUser}:${serverName}`,
       MATRIX_PEER_PASSWORD: peerPass,
+      // Reuse one session per role across suites (avoids login 429s).
+      MATRIX_BOT_STORAGE: botStorage,
+      MATRIX_PEER_STORAGE: peerStorage,
     };
 
     // One Matrix account is shared across suites; run files sequentially so

@@ -22,7 +22,12 @@ export function tmpDir(prefix) {
 export async function createLiveBot(env, role, overrides = {}) {
   const userId = role === "bot" ? env.botUser : env.peerUser;
   const password = role === "bot" ? env.botPass : env.peerPass;
-  const storagePath = overrides.storagePath ?? tmpDir(`aio-live-${role}-`);
+  const shared =
+    role === "bot" ? process.env.MATRIX_BOT_STORAGE : process.env.MATRIX_PEER_STORAGE;
+  const storagePath = overrides.storagePath ?? shared ?? tmpDir(`aio-live-${role}-`);
+  if (shared && !overrides.storagePath) {
+    fs.mkdirSync(storagePath, { recursive: true });
+  }
   const bot = await Bot.create({
     homeserverUrl: env.hs,
     userId,
