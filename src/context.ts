@@ -575,7 +575,7 @@ export class ContextFactory {
       type: "m.room.message",
       sender: params.userId,
       room_id: params.roomId,
-      content: { msgtype: "m.matrixbots.mini_app_data", body: params.raw },
+      content: { msgtype: "dev.aiomatrix.mini_app_data", body: params.raw },
       ...(params.messageId ? { event_id: params.messageId } : {}),
     };
     return new MiniAppDataContextImpl(this.deps, {

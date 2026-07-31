@@ -1,7 +1,7 @@
 import type { EncryptionSharePolicy } from "./types.js";
 
-/** Base error for matrixbots SDK. All library errors extend this. */
-export class MatrixBotsError extends Error {
+/** Base error for aiomatrix SDK. All library errors extend this. */
+export class aiomatrixError extends Error {
   constructor(message: string, options?: { cause?: unknown }) {
     super(message);
     this.name = new.target.name;
@@ -19,13 +19,13 @@ export class MatrixBotsError extends Error {
 }
 
 /** Bad SDK usage (missing/conflicting options). Never retryable. */
-export class ConfigurationError extends MatrixBotsError {}
+export class ConfigurationError extends aiomatrixError {}
 
 /**
  * Crypto stack failed to publish/verify own device keys after prepare+flush.
  * Bot must not start in a half-broken E2EE state.
  */
-export class CryptoNotReadyError extends MatrixBotsError {
+export class CryptoNotReadyError extends aiomatrixError {
   constructor(
     message = "Crypto not ready: own device keys missing on homeserver after prepare/flush",
   ) {
@@ -34,7 +34,7 @@ export class CryptoNotReadyError extends MatrixBotsError {
 }
 
 /** Configured deviceId does not match the device id from whoami/crypto store. */
-export class DeviceMismatchError extends MatrixBotsError {
+export class DeviceMismatchError extends aiomatrixError {
   constructor(
     readonly expected: string,
     readonly actual: string | null | undefined,
@@ -49,7 +49,7 @@ export class DeviceMismatchError extends MatrixBotsError {
  * Encrypted room has no decryptable peer device keys — sending would create
  * ciphertext nobody can read. Send is aborted.
  */
-export class PeerKeysMissingError extends MatrixBotsError {
+export class PeerKeysMissingError extends aiomatrixError {
   constructor(
     readonly roomId: string,
     readonly peerUserIds: string[],
@@ -61,7 +61,7 @@ export class PeerKeysMissingError extends MatrixBotsError {
 }
 
 /** Room is encrypted but client crypto is disabled/unavailable. */
-export class EncryptedRoomWithoutCryptoError extends MatrixBotsError {
+export class EncryptedRoomWithoutCryptoError extends aiomatrixError {
   constructor(roomId: string) {
     super(
       `Room ${roomId} is encrypted but bot crypto is disabled. Refusing plaintext fallback.`,
@@ -73,7 +73,7 @@ export class EncryptedRoomWithoutCryptoError extends MatrixBotsError {
  * Encryption state for a room could not be determined (transient HS error).
  * Sending is refused because a plaintext fallback could leak into an E2EE room.
  */
-export class EncryptionStateUnknownError extends MatrixBotsError {
+export class EncryptionStateUnknownError extends aiomatrixError {
   constructor(
     readonly roomId: string,
     options?: { cause?: unknown },
@@ -89,7 +89,7 @@ export class EncryptionStateUnknownError extends MatrixBotsError {
  * shareRoomKey produced only m.room_key.withheld (zero actual key shares).
  * New outbound Megolm sessions would be undecryptable by peers.
  */
-export class RoomKeyWithheldError extends MatrixBotsError {
+export class RoomKeyWithheldError extends aiomatrixError {
   constructor(
     readonly roomId: string,
     readonly withheld: number,
@@ -106,7 +106,7 @@ export class RoomKeyWithheldError extends MatrixBotsError {
 }
 
 /** Homeserver returned 429 / M_LIMIT_EXCEEDED and retries were exhausted. */
-export class RateLimitedError extends MatrixBotsError {
+export class RateLimitedError extends aiomatrixError {
   constructor(
     readonly retryAfterMs: number,
     readonly method: string,
@@ -119,7 +119,7 @@ export class RateLimitedError extends MatrixBotsError {
 }
 
 /** Request exceeded its timeout budget. */
-export class RequestTimeoutError extends MatrixBotsError {
+export class RequestTimeoutError extends aiomatrixError {
   constructor(
     readonly timeoutMs: number,
     readonly method: string,
@@ -130,7 +130,7 @@ export class RequestTimeoutError extends MatrixBotsError {
 }
 
 /** Access token is invalid/expired and could not be refreshed. */
-export class AuthenticationError extends MatrixBotsError {
+export class AuthenticationError extends aiomatrixError {
   constructor(
     message: string,
     readonly softLogout: boolean = false,
@@ -141,10 +141,10 @@ export class AuthenticationError extends MatrixBotsError {
 }
 
 /** `.well-known` / homeserver resolution failed. */
-export class DiscoveryError extends MatrixBotsError {}
+export class DiscoveryError extends aiomatrixError {}
 
 /** Media upload/download exceeded the configured size limit. */
-export class MediaTooLargeError extends MatrixBotsError {
+export class MediaTooLargeError extends aiomatrixError {
   constructor(
     readonly bytes: number,
     readonly limitBytes: number,
@@ -154,7 +154,7 @@ export class MediaTooLargeError extends MatrixBotsError {
 }
 
 /** MiniApp `initData` failed signature/expiry validation. */
-export class MiniAppAuthError extends MatrixBotsError {
+export class MiniAppAuthError extends aiomatrixError {
   constructor(
     message: string,
     readonly reason:
@@ -170,7 +170,7 @@ export class MiniAppAuthError extends MatrixBotsError {
 }
 
 /** A handler exceeded its allotted runtime and was abandoned. */
-export class HandlerTimeoutError extends MatrixBotsError {
+export class HandlerTimeoutError extends aiomatrixError {
   constructor(
     readonly timeoutMs: number,
     readonly where: string,

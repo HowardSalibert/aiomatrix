@@ -777,7 +777,7 @@ export class CryptoEngine {
       ...event,
       type: clear.type ?? "m.room.message",
       content: isPlainObject(clear.content) ? clear.content : {},
-      matrixbots_encryption: {
+      aiomatrix_encryption: {
         senderDevice: decrypted.senderDevice?.toString() ?? null,
         senderCurve25519Key: decrypted.senderCurve25519Key ?? null,
         senderClaimedEd25519Key: decrypted.senderClaimedEd25519Key ?? null,

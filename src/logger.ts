@@ -31,13 +31,13 @@ export function parseLogLevel(value: unknown, fallback: LogLevel = "info"): LogL
   return normalized in LEVEL_WEIGHT ? (normalized as LogLevel) : fallback;
 }
 
-/** Console logger with `[matrixbots:scope]` prefixes and level filtering. */
+/** Console logger with `[aiomatrix:scope]` prefixes and level filtering. */
 export class ConsoleLogger implements Logger {
   readonly level: LogLevel;
   private readonly scope: string;
   private readonly threshold: number;
 
-  constructor(level: LogLevel = "info", scope = "matrixbots") {
+  constructor(level: LogLevel = "info", scope = "aiomatrix") {
     this.level = level;
     this.scope = scope;
     this.threshold = LEVEL_WEIGHT[level];
@@ -94,13 +94,13 @@ export const silentLogger: Logger = {
 };
 
 /**
- * Default logger honouring `MATRIXBOTS_LOG_LEVEL` (trace|debug|info|warn|error|silent).
+ * Default logger honouring `AIOMATRIX_LOG_LEVEL` (trace|debug|info|warn|error|silent).
  */
 export function createDefaultLogger(level?: LogLevel): Logger {
   const resolved =
     level ??
     parseLogLevel(
-      typeof process !== "undefined" ? process.env?.MATRIXBOTS_LOG_LEVEL : undefined,
+      typeof process !== "undefined" ? process.env?.AIOMATRIX_LOG_LEVEL : undefined,
     );
   if (resolved === "silent") return silentLogger;
   return new ConsoleLogger(resolved);

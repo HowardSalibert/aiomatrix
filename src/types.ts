@@ -186,7 +186,7 @@ export interface MembershipContext extends BaseContext<"membership" | "invite"> 
   leave(reason?: string): Promise<void>;
 }
 
-/** Inline-keyboard button press (matrixbots' analogue of a Telegram callback query). */
+/** Inline-keyboard button press (aiomatrix' analogue of a Telegram callback query). */
 export interface CallbackContext extends BaseContext<"callback_query"> {
   /** Opaque payload attached to the pressed button. */
   readonly callbackData: string;

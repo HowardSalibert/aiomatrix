@@ -5,7 +5,7 @@ import { isPlainObject } from "./util.js";
  * Pure E2EE policy helpers.
  *
  * Deliberately free of any dependency on the native crypto bindings so that
- * `import 'matrixbots'` works on platforms where `@matrix-org/matrix-sdk-crypto-nodejs`
+ * `import 'aiomatrix'` works on platforms where `@matrix-org/matrix-sdk-crypto-nodejs`
  * has no prebuilt binary — bots running with `crypto: false` must not pay for E2EE.
  */
 

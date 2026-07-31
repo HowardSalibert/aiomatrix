@@ -226,7 +226,7 @@ describe("lifecycle", () => {
 
     await bot.advertiseCommands(ROOM);
     const call = fetchImpl.requests.find((r) => r.route.includes("/state/"));
-    assert.match(call.route, /m\.matrixbots\.commands/);
+    assert.match(call.route, /dev\.aiomatrix\.commands/);
     assert.ok(Array.isArray(call.body.commands));
   });
 });
@@ -354,7 +354,7 @@ describe("inline keyboard callbacks", () => {
       userId: USER,
     });
     const read = bot.readCallbackEvent(ROOM, {
-      type: "m.matrixbots.callback",
+      type: "dev.aiomatrix.callback",
       sender: USER,
       content: { token },
     });
@@ -368,7 +368,7 @@ describe("inline keyboard callbacks", () => {
     const token = bot.callbacks.issue({ roomId: ROOM, data: "x", messageEventId: "$c" });
     assert.equal(
       bot.readCallbackEvent("!other:example.org", {
-        type: "m.matrixbots.callback",
+        type: "dev.aiomatrix.callback",
         sender: USER,
         content: { token },
       }),
@@ -386,7 +386,7 @@ describe("inline keyboard callbacks", () => {
     });
     assert.equal(
       bot.readCallbackEvent(ROOM, {
-        type: "m.matrixbots.callback",
+        type: "dev.aiomatrix.callback",
         sender: "@intruder:example.org",
         content: { token },
       }),
@@ -417,7 +417,7 @@ describe("inline keyboard callbacks", () => {
     );
     assert.equal(
       bot.readCallbackEvent(ROOM, {
-        type: "m.matrixbots.callback",
+        type: "dev.aiomatrix.callback",
         sender: USER,
         content: { token: "made-up" },
       }),
@@ -428,7 +428,7 @@ describe("inline keyboard callbacks", () => {
   it("passes through a client-supplied payload when no token was minted", async () => {
     const { bot } = await makeBot();
     const read = bot.readCallbackEvent(ROOM, {
-      type: "m.matrixbots.callback",
+      type: "dev.aiomatrix.callback",
       sender: USER,
       content: { data: "raw:1", message_id: "$c" },
     });
@@ -441,7 +441,7 @@ describe("inline keyboard callbacks", () => {
     const keyboard = new InlineKeyboard().text("Yes", "vote:yes").text("No", "vote:no");
     await bot.sendMessage(ROOM, "Pick one", { keyboard });
     const sent = fetchImpl.requests.find((r) => r.route.includes("/send/"));
-    const buttons = sent.body["m.matrixbots.keyboard"].inline.flat();
+    const buttons = sent.body["dev.aiomatrix.keyboard"].inline.flat();
     assert.equal(buttons.length, 2);
     for (const button of buttons) {
       const record = bot.callbacks.peek(button.token);
@@ -549,7 +549,7 @@ describe("sendMiniApp", () => {
     const { bot, fetchImpl } = await makeBot({ miniApp });
     await bot.sendMiniApp(ROOM, { title: "Schedule", userId: USER });
     const sent = fetchImpl.requests.find((r) => r.route.includes("/send/"));
-    const card = sent.body["m.matrixbots.mini_app"];
+    const card = sent.body["dev.aiomatrix.mini_app"];
     assert.equal(card.title, "Schedule");
     assert.match(card.url, /#matrixWebAppData=/);
     assert.equal(card.bot_id, "@bot:example.org");
@@ -559,7 +559,7 @@ describe("sendMiniApp", () => {
     const { bot, fetchImpl } = await makeBot({ miniApp });
     await bot.sendMiniApp(ROOM, { title: "Schedule" });
     const card = fetchImpl.requests.find((r) => r.route.includes("/send/")).body[
-      "m.matrixbots.mini_app"
+      "dev.aiomatrix.mini_app"
     ];
     assert.equal(card.url, "https://app.example.org/");
   });

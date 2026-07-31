@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import {
   AuthenticationError,
   ConfigurationError,
-  MatrixBotsError,
+  aiomatrixError,
   RateLimitedError,
   RequestTimeoutError,
 } from "./errors.js";
@@ -17,7 +17,7 @@ const DEFAULT_MAX_RETRY_DELAY_MS = 30_000;
 const MAX_HONOURED_RETRY_AFTER_MS = 90_000;
 
 /** Matrix Client-Server error response (`errcode` + `error`). */
-export class MatrixApiError extends MatrixBotsError {
+export class MatrixApiError extends aiomatrixError {
   readonly status: number;
   readonly errcode: string | null;
   readonly body: unknown;
@@ -71,7 +71,7 @@ export function normalizeHomeserverUrl(
 ): string {
   const trimmed = homeserverUrl.trim();
   if (!trimmed) {
-    throw new MatrixBotsError("homeserverUrl must not be empty");
+    throw new aiomatrixError("homeserverUrl must not be empty");
   }
   const withScheme = /^[a-z][a-z0-9+.-]*:\/\//i.test(trimmed)
     ? trimmed
@@ -81,10 +81,10 @@ export function normalizeHomeserverUrl(
   try {
     url = new URL(base);
   } catch {
-    throw new MatrixBotsError(`Invalid homeserverUrl: ${homeserverUrl}`);
+    throw new aiomatrixError(`Invalid homeserverUrl: ${homeserverUrl}`);
   }
   if (url.protocol !== "https:" && url.protocol !== "http:") {
-    throw new MatrixBotsError(
+    throw new aiomatrixError(
       `homeserverUrl must use http(s), got ${url.protocol} in ${homeserverUrl}`,
     );
   }
@@ -201,7 +201,7 @@ export class MatrixHttp {
     this.onRequest = options.onRequest;
     this.fetchImpl = options.fetchImpl ?? globalThis.fetch;
     if (typeof this.fetchImpl !== "function") {
-      throw new MatrixBotsError(
+      throw new aiomatrixError(
         "global fetch is unavailable — use Node >= 20 or pass fetchImpl",
       );
     }

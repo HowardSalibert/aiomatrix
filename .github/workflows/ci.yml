@@ -29,7 +29,7 @@ jobs:
       - run: npm run build
       - run: npm run test:only
 
-  # The native crypto bindings are an optionalDependency: importing `matrixbots`
+  # The native crypto bindings are an optionalDependency: importing `aiomatrix`
   # must work even where no prebuilt binary exists, as long as crypto is off.
   no-native-crypto:
     name: import without native crypto

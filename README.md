@@ -1,10 +1,10 @@
-# matrixbots
+# aiomatrix
 
 An aiogram-style framework for Matrix bots: routers, filters, FSM, middleware, inline keyboards,
 end-to-end encryption, and a MiniApp platform modelled on Telegram WebApps.
 
 ```bash
-npm install matrixbots
+npm install aiomatrix
 # optional: end-to-end encryption (native bindings, skip on unsupported platforms)
 npm install @matrix-org/matrix-sdk-crypto-nodejs
 ```
@@ -14,7 +14,7 @@ Node >= 20.10, ESM only.
 ## Hello bot
 
 ```ts
-import { Bot, Dispatcher, Router, Command, F } from "matrixbots";
+import { Bot, Dispatcher, Router, Command, F } from "aiomatrix";
 
 const bot = await Bot.create({
   homeserverUrl: "@mybot:example.org", // user id, server name, or full URL
@@ -79,7 +79,7 @@ router.on(["message", "reaction"], onBoth); // explicit types
 `F` composes fluently; every leaf is a plain function, so custom filters need no base class.
 
 ```ts
-import { F, and, not, Command } from "matrixbots";
+import { F, and, not, Command } from "aiomatrix";
 
 F.text;                          // any non-empty body
 F.text.contains("deploy");       // also .equals .startsWith .endsWith .in .len
@@ -111,7 +111,7 @@ bare `name`. `Command` also accepts `description`, `args`, `minPowerLevel`, `sco
 ### FSM
 
 ```ts
-import { createStates } from "matrixbots";
+import { createStates } from "aiomatrix";
 
 const Form = createStates("form", ["name", "age"] as const);
 
@@ -136,7 +136,7 @@ router.message(Form.age, F.text, async (ctx) => {
 Storage defaults to memory. For state that survives restarts:
 
 ```ts
-import { Dispatcher, JsonFileStorage } from "matrixbots";
+import { Dispatcher, JsonFileStorage } from "aiomatrix";
 
 const dp = new Dispatcher({
   storage: new JsonFileStorage("./data/fsm.json"),
@@ -147,7 +147,7 @@ const dp = new Dispatcher({
 ### Middleware
 
 ```ts
-import { throttle, accessControl, typingIndicator, errorReply, logging, i18n } from "matrixbots";
+import { throttle, accessControl, typingIndicator, errorReply, logging, i18n } from "aiomatrix";
 
 dp.use(logging());
 dp.use(throttle({ limit: 5, windowMs: 10_000 }));
@@ -161,11 +161,11 @@ Middleware runs outside-in and can short-circuit by not calling `next()`.
 
 ### Inline keyboards
 
-Matrix has no native inline keyboards, so this ships a convention (`m.matrixbots.keyboard`) plus a
+Matrix has no native inline keyboards, so this ships a convention (`dev.aiomatrix.keyboard`) plus a
 plain-text fallback so clients that don't understand it still show usable buttons.
 
 ```ts
-import { InlineKeyboard } from "matrixbots";
+import { InlineKeyboard } from "aiomatrix";
 
 const kb = new InlineKeyboard()
   .text("Yes", "vote:yes")
@@ -217,7 +217,7 @@ Jobs never overlap themselves, errors are logged rather than fatal, and everythi
 ## End-to-end encryption
 
 E2EE uses the Rust crypto machine directly (`@matrix-org/matrix-sdk-crypto-nodejs`), which is an
-**optional** dependency: `import "matrixbots"` works on platforms with no prebuilt binary as long as
+**optional** dependency: `import "aiomatrix"` works on platforms with no prebuilt binary as long as
 you run with `crypto: false`. Requesting crypto without the package throws a `ConfigurationError`
 that says exactly what to install.
 
@@ -333,9 +333,9 @@ await Bot.create({ /* ... */, onFatal: (err) => { console.error(err); process.ex
 ## Subpath exports
 
 ```ts
-import { Bot } from "matrixbots";              // everything except the native crypto class
-import { CryptoEngine } from "matrixbots/crypto"; // needs the optional native package
-import { validateInitData } from "matrixbots/miniapp";
+import { Bot } from "aiomatrix";              // everything except the native crypto class
+import { CryptoEngine } from "aiomatrix/crypto"; // needs the optional native package
+import { validateInitData } from "aiomatrix/miniapp";
 ```
 
 ## Docs

@@ -372,7 +372,7 @@ export class CommandRegistry {
  * State event type bots use to advertise their commands to clients so hosts can
  * build slash-autocomplete without hard-coding anything.
  */
-export const COMMANDS_STATE_EVENT_TYPE = "m.matrixbots.commands";
+export const COMMANDS_STATE_EVENT_TYPE = "dev.aiomatrix.commands";
 
 export function buildCommandsStateContent(
   specs: CommandSpec[],

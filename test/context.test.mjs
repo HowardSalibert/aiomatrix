@@ -310,7 +310,7 @@ describe("context send helpers", () => {
   it("attaches a keyboard and mints tokens bound to the sent event", async () => {
     const { ctx, client, callbacks } = await messageContext("hi");
     await ctx.answer("Pick", { keyboard: new InlineKeyboard().text("Yes", "yes") });
-    const keyboard = client.sent[0].content["m.matrixbots.keyboard"];
+    const keyboard = client.sent[0].content["dev.aiomatrix.keyboard"];
     const token = keyboard.inline[0][0].token;
     assert.equal(callbacks.peek(token).messageEventId, client.sent[0].eventId);
   });
@@ -318,7 +318,7 @@ describe("context send helpers", () => {
   it("restricts keyboard buttons to the triggering user", async () => {
     const { ctx, client, callbacks } = await messageContext("hi", { sender: "@alice:example.org" });
     await ctx.answer("Pick", { keyboard: new InlineKeyboard().text("Yes", "yes") });
-    const token = client.sent[0].content["m.matrixbots.keyboard"].inline[0][0].token;
+    const token = client.sent[0].content["dev.aiomatrix.keyboard"].inline[0][0].token;
     assert.equal(callbacks.resolve(token, "@mallory:example.org"), null);
     assert.ok(callbacks.resolve(token, "@alice:example.org"));
   });

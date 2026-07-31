@@ -1,4 +1,4 @@
-# MatrixBots audit log
+# aiomatrix audit log
 
 Seven hardening cycles (crypto / sync / HTTP / DX / ship / RU-bots / publish). Residual risks that need live HS smoke are listed under each cycle and summarized at the end.
 
@@ -154,7 +154,7 @@ Hardening for public consumers / RU bots:
 1. **Fail-fast device mismatch** — `createMatrixClient` throws `DeviceMismatchError` when both `options.deviceId` and whoami `device_id` are set and differ (no soft-allow).
 2. **Cyrillic NFC command normalize** — exported `normalizeCommandName` (`NFC` + lower + strip `/!` + before `:`); `Command` / `parseCommandToken` / `matchCommand` / `suggestCommands` all fold through it; Unicode `\S+` kept; tests for `!сводка`, `/помощь`, aliases, prefix suggest, NFD≡NFC.
 3. **RoomKeyWithheldError** message includes `rotateEveryMessage` alongside the other policy flags.
-4. **Docs** — device/crypto wipe ops (wipe `storagePath/crypto` + set login `device_id`); prefer `Bot`/`ctx.reply`; quickstart notes packages ↔ `Z:\MatrixBots` must stay identical at v0.2.1.
+4. **Docs** — device/crypto wipe ops (wipe `storagePath/crypto` + set login `device_id`); prefer `Bot`/`ctx.reply`; quickstart notes packages ↔ `Z:\aiomatrix` must stay identical at v0.2.1.
 5. Prior E2EE surface confirmed: self-exclude megolm recipients, `rotateEveryMessage` default, DeviceLists dirty before KeysQuery (Cycles / share-policy work).
 
 ### Cycle 6 residual
@@ -207,7 +207,7 @@ Full-project sweep for bottlenecks, illogical behaviour, leaks, vulnerabilities,
 
 ### Universal compatibility
 
-- Native E2EE bindings moved to `optionalDependencies` and loaded on demand, so `import "matrixbots"`
+- Native E2EE bindings moved to `optionalDependencies` and loaded on demand, so `import "aiomatrix"`
   works where no prebuilt binary exists. Verified by removing `node_modules/@matrix-org` and importing
   the root entry (CI job `no-native-crypto`).
 - Homeserver discovery via `.well-known`, so `homeserverUrl` accepts a URL, a server name, or a user id.

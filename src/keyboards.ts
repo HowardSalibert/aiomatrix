@@ -1,9 +1,9 @@
 import { escapeHtml, isPlainObject, randomId, readString } from "./util.js";
 
-/** Content field carrying a matrixbots inline keyboard. */
-export const KEYBOARD_CONTENT_KEY = "m.matrixbots.keyboard";
+/** Content field carrying a aiomatrix inline keyboard. */
+export const KEYBOARD_CONTENT_KEY = "dev.aiomatrix.keyboard";
 /** Room event type sent by a client when an inline button is pressed. */
-export const CALLBACK_EVENT_TYPE = "m.matrixbots.callback";
+export const CALLBACK_EVENT_TYPE = "dev.aiomatrix.callback";
 /** Text-command fallback so keyboards work in clients with no button support. */
 export const CALLBACK_FALLBACK_COMMAND = "cb";
 export const KEYBOARD_SCHEMA_VERSION = 1;
@@ -94,7 +94,7 @@ function assertButtonUrl(url: string, requireHttps: boolean): string {
  * Inline keyboard builder — the Matrix analogue of Telegram's
  * `InlineKeyboardMarkup`.
  *
- * Serialised into the `m.matrixbots.keyboard` content field for clients that
+ * Serialised into the `dev.aiomatrix.keyboard` content field for clients that
  * render buttons natively, plus a numbered plain-text/HTML fallback so the same
  * message stays usable in Element or any other stock client.
  */
@@ -177,7 +177,7 @@ export class InlineKeyboard {
     return this.buttons.length === 0;
   }
 
-  /** Serialise for the `m.matrixbots.keyboard` content field. */
+  /** Serialise for the `dev.aiomatrix.keyboard` content field. */
   toContent(): KeyboardContent {
     return {
       version: KEYBOARD_SCHEMA_VERSION,

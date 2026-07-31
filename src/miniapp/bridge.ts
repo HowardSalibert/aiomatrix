@@ -5,7 +5,7 @@
  * without extra build steps:
  *
  * ```ts
- * import { serveMiniAppBridge } from 'matrixbots';
+ * import { serveMiniAppBridge } from 'aiomatrix';
  * app.get('/matrix-miniapp.js', (_req, res) => {
  *   const asset = serveMiniAppBridge();
  *   res.type(asset.contentType).set('ETag', asset.etag).send(asset.body);
@@ -15,8 +15,8 @@
 
 import { createHash } from "node:crypto";
 
-/** postMessage envelope tag used by matrixbots hosts. */
-export const BRIDGE_SOURCE = "matrixbots-miniapp";
+/** postMessage envelope tag used by aiomatrix hosts. */
+export const BRIDGE_SOURCE = "aiomatrix-miniapp";
 /** Legacy envelope tag used by the StudNovSU web client. */
 export const BRIDGE_SOURCE_STUDNOVSU = "studnovsu-twa";
 /** URL fragment key carrying signed launch data. */
@@ -55,10 +55,10 @@ export type BridgeHostMessageType =
   | "dataSent"
   | "error";
 
-export const MINIAPP_BRIDGE_SCRIPT = `/*! matrixbots MiniApp bridge — MIT */
+export const MINIAPP_BRIDGE_SCRIPT = `/*! aiomatrix MiniApp bridge — MIT */
 (function () {
   "use strict";
-  if (window.MatrixMiniApp && window.MatrixMiniApp.__matrixbots) return;
+  if (window.MatrixMiniApp && window.MatrixMiniApp.__aiomatrix) return;
 
   var SOURCES = ["${BRIDGE_SOURCE}", "${BRIDGE_SOURCE_STUDNOVSU}"];
   var FRAGMENT_KEYS = ["${BRIDGE_FRAGMENT_KEY}", "tgWebAppData"];
@@ -101,7 +101,7 @@ export const MINIAPP_BRIDGE_SCRIPT = `/*! matrixbots MiniApp bridge — MIT */
       try {
         handlers[i](arg);
       } catch (err) {
-        if (window.console && console.error) console.error("[matrixbots] listener failed", err);
+        if (window.console && console.error) console.error("[aiomatrix] listener failed", err);
       }
     }
   }
@@ -137,7 +137,7 @@ export const MINIAPP_BRIDGE_SCRIPT = `/*! matrixbots MiniApp bridge — MIT */
   var initialInitData = readFragmentInitData();
 
   var api = {
-    __matrixbots: true,
+    __aiomatrix: true,
     version: "1.0",
     platform: "matrix",
     initData: initialInitData,
@@ -352,7 +352,7 @@ export const MINIAPP_BRIDGE_SCRIPT = `/*! matrixbots MiniApp bridge — MIT */
   window.MatrixMiniApp = api;
   // Drop-in alias so mini apps written against the Telegram WebApp API work.
   window.Telegram = window.Telegram || {};
-  if (!window.Telegram.WebApp || !window.Telegram.WebApp.__matrixbots) {
+  if (!window.Telegram.WebApp || !window.Telegram.WebApp.__aiomatrix) {
     window.Telegram.WebApp = api;
   }
 

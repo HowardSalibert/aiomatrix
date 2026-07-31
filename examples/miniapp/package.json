@@ -1,5 +1,5 @@
 {
-  "name": "matrixbots-miniapp-example",
+  "name": "aiomatrix-miniapp-example",
   "private": true,
   "type": "module",
   "scripts": {
@@ -9,7 +9,7 @@
   },
   "dependencies": {
     "dotenv": "^16.4.7",
-    "matrixbots": "file:../.."
+    "aiomatrix": "file:../.."
   },
   "devDependencies": {
     "@types/node": "^22.10.0",

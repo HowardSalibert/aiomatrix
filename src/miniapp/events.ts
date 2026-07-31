@@ -3,13 +3,13 @@ import { InlineKeyboard, KEYBOARD_CONTENT_KEY, isSafeButtonUrl } from "../keyboa
 import { escapeHtml, isPlainObject, readString } from "../util.js";
 
 /** Canonical content field describing a MiniApp launch card. */
-export const MINI_APP_CONTENT_KEY = "m.matrixbots.mini_app";
+export const MINI_APP_CONTENT_KEY = "dev.aiomatrix.mini_app";
 /** msgtype used by the StudNovSU client. Kept for interoperability. */
 export const MINI_APP_MSGTYPE_STUDNOVSU = "ru.studnovsu.mini_app";
 /** msgtype for data sent back by a mini app. */
-export const MINI_APP_DATA_MSGTYPE = "m.matrixbots.mini_app_data";
+export const MINI_APP_DATA_MSGTYPE = "dev.aiomatrix.mini_app_data";
 /** Content field / to-device event type for mini app → bot data. */
-export const MINI_APP_DATA_KEY = "m.matrixbots.mini_app_data";
+export const MINI_APP_DATA_KEY = "dev.aiomatrix.mini_app_data";
 export const MINI_APP_SCHEMA_VERSION = 1;
 
 export interface MiniAppCardOptions {
@@ -57,7 +57,7 @@ export interface MiniAppCard {
  * Build the `m.room.message` content for a MiniApp launch card.
  *
  * The result carries three layers so it works everywhere:
- * 1. `m.matrixbots.mini_app` — canonical descriptor for matrixbots-aware hosts;
+ * 1. `dev.aiomatrix.mini_app` — canonical descriptor for aiomatrix-aware hosts;
  * 2. top-level `url`/`title` plus the StudNovSU msgtype when requested;
  * 3. a plain-text/HTML body with the link, so stock clients stay usable.
  */

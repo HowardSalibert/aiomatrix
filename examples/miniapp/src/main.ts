@@ -21,7 +21,7 @@ import {
   InlineKeyboard,
   Router,
   serveMiniAppBridge,
-} from "matrixbots";
+} from "aiomatrix";
 import { PAGE_HTML } from "./page.js";
 
 const here = path.dirname(fileURLToPath(import.meta.url));

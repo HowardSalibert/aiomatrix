@@ -4,24 +4,51 @@ Most bots need three small edits or none at all. Commands, filters, `ctx.reply`,
 `Bot.create` all still work the way they did. The breaking changes are concentrated in the crypto
 export, the dispatcher's internal entry point, and two behaviour defaults.
 
+## 0. The package is now called `aiomatrix`
+
+`matrixbots` on npm belongs to an unrelated, abandoned package, so the published name is `aiomatrix`.
+
+```diff
+-import { Bot } from "matrixbots";
++import { Bot } from "aiomatrix";
+```
+
+```bash
+npm uninstall matrixbots && npm install aiomatrix
+```
+
+The custom event types moved with it, and out of the `m.*` namespace that the Matrix spec reserves for
+itself:
+
+| 0.2.x | 0.3.0 |
+|---|---|
+| `m.matrixbots.commands` | `dev.aiomatrix.commands` |
+| `m.matrixbots.keyboard` | `dev.aiomatrix.keyboard` |
+| `m.matrixbots.callback` | `dev.aiomatrix.callback` |
+| `m.matrixbots.mini_app` | `dev.aiomatrix.mini_app` |
+
+Only the command-advertisement event existed in 0.2.x; the rest are new. If you have `m.matrixbots.commands`
+state events lying around in rooms, re-run `bot.advertiseCommands(roomId)` to write the new one. Also
+rename the `MATRIXBOTS_LOG_LEVEL` environment variable to `AIOMATRIX_LOG_LEVEL`.
+
 ## Requirements
 
 - Node >= 20.10 (was >= 20).
 
 ## 1. `CryptoEngine` moved out of the root entry
 
-The native E2EE bindings are now an `optionalDependency`, so `matrixbots` itself imports on any
+The native E2EE bindings are now an `optionalDependency`, so `aiomatrix` itself imports on any
 platform. `CryptoEngine` is no longer a runtime export of the root module.
 
 ```diff
--import { CryptoEngine } from "matrixbots";
-+import { CryptoEngine } from "matrixbots/crypto";
+-import { CryptoEngine } from "aiomatrix";
++import { CryptoEngine } from "aiomatrix/crypto";
 ```
 
 or, if you want the friendly error when the native package is missing:
 
 ```ts
-import { loadCryptoEngine } from "matrixbots";
+import { loadCryptoEngine } from "aiomatrix";
 const CryptoEngine = await loadCryptoEngine();
 ```
 
@@ -32,7 +59,7 @@ a lockfile, add the optional dependency explicitly so it is definitely installed
 npm install @matrix-org/matrix-sdk-crypto-nodejs
 ```
 
-`mapHistoryVisibility` also moved to `matrixbots/crypto`. The policy helpers
+`mapHistoryVisibility` also moved to `aiomatrix/crypto`. The policy helpers
 (`resolveEncryptionSharePolicy`, `normalizeToDeviceBody`, `DEFAULT_ENCRYPTION_SHARE_POLICY`,
 `filterShareRecipients`, `parseToDeviceRecipients`) stay on the root export — they are pure functions
 with no native code behind them.
@@ -53,9 +80,9 @@ and replays. `dispatcher.feed(ctx)` still exists for contexts you built with `Co
 ## 3. `createContext` became `ContextFactory`
 
 ```diff
--import { createContext } from "matrixbots";
+-import { createContext } from "aiomatrix";
 -const ctx = createContext(bot, roomId, event);
-+import { ContextFactory } from "matrixbots";
++import { ContextFactory } from "aiomatrix";
 +const factory = new ContextFactory(deps);
 +const ctx = await factory.fromRoomEvent(roomId, event);
 ```

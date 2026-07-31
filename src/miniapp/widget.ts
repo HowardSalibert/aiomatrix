@@ -27,7 +27,7 @@ export interface WidgetOptions {
  *
  * Widgets are the native Matrix embedding mechanism: pinning a mini app as a
  * widget makes it usable in Element and other stock clients without any
- * matrixbots-specific support.
+ * aiomatrix-specific support.
  */
 export function buildWidgetStateContent(options: WidgetOptions): Record<string, unknown> {
   return {

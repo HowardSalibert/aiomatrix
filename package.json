@@ -1,5 +1,5 @@
 {
-  "name": "matrixbots",
+  "name": "aiomatrix",
   "version": "0.3.0",
   "description": "Aiogram-like framework for Matrix bots: routers, filters, FSM, inline keyboards, E2EE and MiniApps",
   "type": "module",
@@ -56,18 +56,18 @@
     "webapp",
     "widget",
     "fsm",
-    "matrixbots"
+    "aiomatrix"
   ],
   "author": "Howard Salibert / StudNovSU contributors",
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/HowardSalibert/matrixbots.git"
+    "url": "git+https://github.com/HowardSalibert/aiomatrix.git"
   },
   "bugs": {
-    "url": "https://github.com/HowardSalibert/matrixbots/issues"
+    "url": "https://github.com/HowardSalibert/aiomatrix/issues"
   },
-  "homepage": "https://github.com/HowardSalibert/matrixbots#readme",
+  "homepage": "https://github.com/HowardSalibert/aiomatrix#readme",
   "optionalDependencies": {
     "@matrix-org/matrix-sdk-crypto-nodejs": "^0.4.0"
   },

@@ -91,7 +91,7 @@ first contact — safe against unrelated frames, but the explicit pin is stricte
 Serve it from your own origin (there is no CDN to trust):
 
 ```ts
-import { serveMiniAppBridge } from "matrixbots";
+import { serveMiniAppBridge } from "aiomatrix";
 
 app.get("/matrix-miniapp.js", (_req, res) => {
   const asset = serveMiniAppBridge();

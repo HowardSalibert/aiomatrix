@@ -1,5 +1,5 @@
 /**
- * Echo bot — the smallest useful matrixbots setup.
+ * Echo bot — the smallest useful aiomatrix setup.
  *
  * Shows commands, filters, FSM, inline keyboards, middleware, and a scheduled
  * job. Copy `.env.example` → `.env`, then `npm start`.
@@ -19,7 +19,7 @@ import {
   errorReply,
   logging,
   throttle,
-} from "matrixbots";
+} from "aiomatrix";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 loadEnv({ path: path.join(here, "../.env") });

@@ -119,7 +119,7 @@ export class FakeBot {
   }
 
   readCallbackEvent(roomId, event) {
-    if (event.type !== "m.matrixbots.callback") return null;
+    if (event.type !== "dev.aiomatrix.callback") return null;
     const token = event.content?.token;
     const record = token ? this.callbacks.resolve(token, event.sender) : null;
     if (!record || record.roomId !== roomId) return null;

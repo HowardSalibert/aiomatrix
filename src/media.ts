@@ -1,4 +1,4 @@
-import { MediaTooLargeError, MatrixBotsError } from "./errors.js";
+import { MediaTooLargeError, aiomatrixError } from "./errors.js";
 import { MatrixApiError, type MatrixHttp } from "./http.js";
 import { isPlainObject, readNumber, readString } from "./util.js";
 
@@ -107,7 +107,7 @@ export async function uploadMedia(
     },
   );
   if (!resp?.content_uri) {
-    throw new MatrixBotsError("Media upload response did not include content_uri");
+    throw new aiomatrixError("Media upload response did not include content_uri");
   }
   return { contentUri: resp.content_uri, contentType, sizeBytes: data.byteLength };
 }
@@ -134,7 +134,7 @@ export async function downloadMedia(
 ): Promise<Uint8Array> {
   const parsed = parseMxcUri(mxcUri);
   if (!parsed) {
-    throw new MatrixBotsError(`Not an mxc:// URI: ${mxcUri}`);
+    throw new aiomatrixError(`Not an mxc:// URI: ${mxcUri}`);
   }
   const requestOptions = {
     idempotent: true,
@@ -175,7 +175,7 @@ export async function downloadThumbnail(
 ): Promise<Uint8Array> {
   const parsed = parseMxcUri(mxcUri);
   if (!parsed) {
-    throw new MatrixBotsError(`Not an mxc:// URI: ${mxcUri}`);
+    throw new aiomatrixError(`Not an mxc:// URI: ${mxcUri}`);
   }
   const query = {
     width: params.width,

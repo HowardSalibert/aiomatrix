@@ -195,7 +195,7 @@ describe("command advertisement", () => {
       { name: "dm", scope: "direct" },
       { name: "any", scope: "all" },
     ]);
-    assert.equal(COMMANDS_STATE_EVENT_TYPE, "m.matrixbots.commands");
+    assert.equal(COMMANDS_STATE_EVENT_TYPE, "dev.aiomatrix.commands");
     assert.deepEqual(content.prefixes, ["/", "!"]);
     assert.deepEqual(
       content.commands.map((c) => c.name),

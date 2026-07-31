@@ -48,7 +48,7 @@ const initMessage = (payload) => buildBridgeInitMessage(payload);
 describe("bridge bootstrap", () => {
   it("exposes the API and announces itself to the host", () => {
     const { api, outbound } = loadBridge();
-    assert.equal(api.__matrixbots, true);
+    assert.equal(api.__aiomatrix, true);
     assert.equal(api.platform, "matrix");
     assert.deepEqual(
       outbound.map((o) => o.message.type),

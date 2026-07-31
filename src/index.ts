@@ -186,7 +186,7 @@ export type { DownloadOptions, MediaInfo, MxcUri, UploadOptions, UploadResult } 
 // -------------------------------------------------------------------- crypto
 // Only policy helpers are re-exported eagerly. `CryptoEngine` pulls in the
 // native E2EE bindings, so it stays behind `loadCryptoEngine()` (or a direct
-// `matrixbots/crypto` import) to keep this entry point installable everywhere.
+// `aiomatrix/crypto` import) to keep this entry point installable everywhere.
 export {
   DEFAULT_ENCRYPTION_SHARE_POLICY,
   filterShareRecipients,
@@ -216,7 +216,7 @@ export {
   EncryptedRoomWithoutCryptoError,
   EncryptionStateUnknownError,
   HandlerTimeoutError,
-  MatrixBotsError,
+  aiomatrixError,
   MediaTooLargeError,
   MiniAppAuthError,
   PeerKeysMissingError,

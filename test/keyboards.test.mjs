@@ -273,7 +273,7 @@ describe("CallbackRegistry", () => {
 
 describe("wire constants", () => {
   it("stay namespaced under the library", () => {
-    assert.equal(CALLBACK_EVENT_TYPE, "m.matrixbots.callback");
-    assert.equal(KEYBOARD_CONTENT_KEY, "m.matrixbots.keyboard");
+    assert.equal(CALLBACK_EVENT_TYPE, "dev.aiomatrix.callback");
+    assert.equal(KEYBOARD_CONTENT_KEY, "dev.aiomatrix.keyboard");
   });
 });

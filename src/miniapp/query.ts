@@ -14,7 +14,7 @@ export interface MiniAppQueryRecord {
 
 /**
  * Tracks in-flight MiniApp launches so a mini app can post results back to the
- * bot exactly once (matrixbots' analogue of Telegram's `answerWebAppQuery`).
+ * bot exactly once (aiomatrix' analogue of Telegram's `answerWebAppQuery`).
  */
 export class MiniAppQueryRegistry {
   private readonly queries = new Map<string, MiniAppQueryRecord>();

@@ -372,5 +372,5 @@ export const F = {
   not,
 };
 
-/** Alias so `import { Filter } from 'matrixbots'` keeps working. */
+/** Alias so `import { Filter } from 'aiomatrix'` keeps working. */
 export type { Filter } from "./types.js";

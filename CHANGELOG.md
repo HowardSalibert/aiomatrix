@@ -9,6 +9,14 @@ A near-total rework toward the aiogram feature set, plus the MiniApp platform. T
 basics are unchanged, but routing, contexts, and the client surface grew substantially. See
 [MIGRATION.md](./MIGRATION.md).
 
+### Renamed
+
+- **The package is published as `aiomatrix`.** `matrixbots` on npm is taken by an unrelated package
+  last touched in 2022.
+- Custom event types moved from `m.matrixbots.*` to `dev.aiomatrix.*`. The `m.*` namespace is reserved
+  for the Matrix specification, so using it was wrong regardless of the rename.
+- `MATRIXBOTS_LOG_LEVEL` → `AIOMATRIX_LOG_LEVEL`.
+
 ### Security fixes
 
 - **Plaintext leak into encrypted rooms.** `isRoomEncrypted` used to cache `false` on *any* error, so a
@@ -94,14 +102,14 @@ basics are unchanged, but routing, contexts, and the client surface grew substan
 
 ### Changed
 
-- **Native crypto is an `optionalDependency`.** `import "matrixbots"` now works on platforms without a
-  prebuilt binary; the engine loads on demand via `loadCryptoEngine()` (or `matrixbots/crypto`), and
+- **Native crypto is an `optionalDependency`.** `import "aiomatrix"` now works on platforms without a
+  prebuilt binary; the engine loads on demand via `loadCryptoEngine()` (or `aiomatrix/crypto`), and
   asking for crypto without the package raises a `ConfigurationError` that names the fix.
 - `rotateEveryMessage` defaults to `false`.
 - Presence defaults to `offline`, so bots stay invisible unless asked otherwise.
 - Stricter TypeScript (`noUncheckedIndexedAccess`, `noImplicitOverride`, `noUnusedLocals`,
   `noUnusedParameters`, `noFallthroughCasesInSwitch`).
-- Subpath exports: `matrixbots`, `matrixbots/crypto`, `matrixbots/miniapp`.
+- Subpath exports: `aiomatrix`, `aiomatrix/crypto`, `aiomatrix/miniapp`.
 - `sideEffects: false` for tree-shaking.
 
 ### Deprecated
