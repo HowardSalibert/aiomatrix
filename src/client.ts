@@ -163,6 +163,13 @@ export class MatrixClient {
   private readonly deduper = new EventDeduper(2_048);
   private readonly queue: DispatchQueue;
   private readonly knownRooms = new Set<string>();
+  /**
+   * Set on cold-start bootstrap. Timeline events with an earlier
+   * `origin_server_ts` are ignored for the rest of this client session so
+   * Synapse history replays (filter changes, limited syncs) cannot re-trigger
+   * handlers after `sync.json` was wiped.
+   */
+  private coldStartNotBeforeMs: number | null = null;
   private readonly options: MatrixClientOptions;
   private syncLoop: SyncLoop | null = null;
   private handlers: ClientHandlers = {};
@@ -1069,6 +1076,7 @@ export class MatrixClient {
     }
     await this.queue.drain(5_000);
     this.handlers = {};
+    this.coldStartNotBeforeMs = null;
   }
 
   /** Epoch ms of the last successful sync (0 before the first one). */
@@ -1084,6 +1092,10 @@ export class MatrixClient {
     response: SyncResponse,
     meta: { isBootstrap: boolean },
   ): Promise<void> {
+    if (meta.isBootstrap && this.coldStartNotBeforeMs == null) {
+      this.coldStartNotBeforeMs = Date.now();
+    }
+
     if (this.crypto) {
       await this.crypto.receiveSync(
         JSON.stringify(response.to_device?.events ?? []),
@@ -1238,6 +1250,18 @@ export class MatrixClient {
 
     const eventId = typeof raw.event_id === "string" ? raw.event_id : "";
     if (eventId && this.deduper.seen(roomId, eventId)) return;
+
+    const ts = typeof raw.origin_server_ts === "number" ? raw.origin_server_ts : null;
+    if (
+      this.coldStartNotBeforeMs != null &&
+      ts != null &&
+      ts < this.coldStartNotBeforeMs
+    ) {
+      this.logger.debug(
+        `skipping pre-cold-start event ${eventId || "(no id)"} in ${roomId}`,
+      );
+      return;
+    }
 
     await this.queue.run(roomId, async () => {
       let event: Record<string, unknown> = raw;

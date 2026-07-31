@@ -184,6 +184,8 @@ export interface SyncLoopOptions {
  *   timeline events into handlers — state/crypto still warm up;
  * - one runtime filter only (no limit:0 → limit:N switch; that replayed history
  *   on Synapse when the filter changed);
+ * - the client also drops timeline events older than the bootstrap instant, so
+ *   any later Synapse history replay cannot re-trigger handlers;
  * - backoff sleeps abort immediately on {@link stop};
  * - a batch that repeatedly breaks `onSync` is skipped instead of stalling.
  */

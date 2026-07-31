@@ -26,6 +26,8 @@ const ROOM = "!room:example.org";
 function makeClient(handler, options = {}) {
   const calls = [];
   const fetchImpl = async (url, init) => {
+    // Yield so a tight /sync loop cannot starve timers in the test.
+    await new Promise((resolve) => setTimeout(resolve, 0));
     const parsed = new URL(String(url));
     calls.push({
       method: init.method,
@@ -230,5 +232,100 @@ describe("room operations", () => {
     const { client, calls } = makeClient(() => ({ body: {} }));
     await client.getProfile("@user with space:hs").catch(() => {});
     assert.ok(!String(calls[0].query).includes(" "));
+  });
+
+  it("after cold-start bootstrap, drops replayed timeline older than start", async () => {
+    const beforeStart = Date.now() - 60_000;
+    let syncCount = 0;
+    const seen = [];
+    let resolveFresh;
+    const gotFresh = new Promise((resolve) => {
+      resolveFresh = resolve;
+    });
+    const { client } = makeClient(async (url) => {
+      const pathName = decodeURIComponent(url.pathname);
+      if (pathName.includes("/filter")) return { body: { filter_id: "f1" } };
+      if (pathName.endsWith("/sync")) {
+        syncCount += 1;
+        if (syncCount === 1) {
+          return {
+            body: {
+              next_batch: "s1",
+              rooms: {
+                join: {
+                  [ROOM]: {
+                    timeline: {
+                      events: [
+                        {
+                          type: "m.room.message",
+                          event_id: "$old",
+                          sender: "@peer:hs",
+                          origin_server_ts: beforeStart,
+                          content: { msgtype: "m.text", body: "old" },
+                        },
+                      ],
+                    },
+                  },
+                },
+              },
+            },
+          };
+        }
+        if (syncCount === 2) {
+          return {
+            body: {
+              next_batch: "s2",
+              rooms: {
+                join: {
+                  [ROOM]: {
+                    timeline: {
+                      limited: true,
+                      events: [
+                        {
+                          type: "m.room.message",
+                          event_id: "$old-replay",
+                          sender: "@peer:hs",
+                          origin_server_ts: beforeStart,
+                          content: { msgtype: "m.text", body: "old-replay" },
+                        },
+                        {
+                          type: "m.room.message",
+                          event_id: "$fresh",
+                          sender: "@peer:hs",
+                          origin_server_ts: Date.now() + 1_000,
+                          content: { msgtype: "m.text", body: "fresh" },
+                        },
+                      ],
+                    },
+                  },
+                },
+              },
+            },
+          };
+        }
+        return { body: { next_batch: `s${syncCount}` } };
+      }
+      return { body: {} };
+    }, { syncTimeoutMs: 20, backoffMinMs: 5, backoffMaxMs: 10 });
+
+    await client.start({
+      onRoomEvent: (_roomId, event) => {
+        const body =
+          event.content && typeof event.content.body === "string" ? event.content.body : null;
+        if (!body) return;
+        seen.push(body);
+        if (body === "fresh") resolveFresh();
+      },
+    });
+
+    await Promise.race([
+      gotFresh,
+      new Promise((_, reject) =>
+        setTimeout(() => reject(new Error(`timed out; seen=${JSON.stringify(seen)}`)), 2_000),
+      ),
+    ]);
+    await client.stop();
+
+    assert.deepEqual(seen, ["fresh"]);
   });
 });

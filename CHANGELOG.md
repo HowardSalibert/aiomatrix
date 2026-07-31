@@ -18,9 +18,10 @@ semantic versioning.
 
 ### Fixed
 
-- **Cold start after wiping `sync.json` could re-dispatch recent room history.** Sync no longer
-  switches from a `timeline.limit: 0` filter to the runtime filter (Synapse replayed history on
-  that transition). The first sync is still marked bootstrap and is not fed to handlers.
+- **Cold start after wiping `sync.json` could re-dispatch recent room history.** Sync keeps a
+  single runtime filter (no `timeline.limit: 0` → N switch), marks the first sync as bootstrap
+  (no handler dispatch), and ignores timeline events with `origin_server_ts` before that
+  bootstrap so later Synapse history replays stay quiet.
 
 ## 0.3.1
 
