@@ -5,6 +5,8 @@ semantic versioning.
 
 ## Unreleased
 
+## 0.4.0
+
 ### Added
 
 - **Signed callback / MiniApp query tokens by default.** `SignedCallbackRegistry` and
@@ -24,6 +26,13 @@ semantic versioning.
   bootstrap so later Synapse history replays stay quiet.
 - **Live CI flake on Synapse `/login` 429.** Suites reuse bot/peer session storage; the ephemeral
   Synapse config relaxes `rc_login`.
+
+### Notes
+
+- Default callback / MiniApp query stores are now HMAC-signed and shareable across processes.
+  Inject Redis (or similar) used-token / nonce stores for strict single-use semantics at scale.
+  Legacy in-memory Maps remain available via `new CallbackRegistry()` /
+  `new MiniAppQueryRegistry()`.
 
 ## 0.3.1
 
