@@ -9,8 +9,10 @@ on:
         description: Existing tag to publish (e.g. v0.3.0)
         required: true
 
+# One release pipeline at a time per tag (workflow_dispatch uses the input tag,
+# tag-push uses github.ref_name) so a retry cannot race the first attempt.
 concurrency:
-  group: release-${{ github.ref }}
+  group: release-${{ github.event.inputs.tag || github.ref_name }}
   cancel-in-progress: false
 
 jobs:
@@ -46,12 +48,26 @@ jobs:
             exit 1
           fi
 
-      - run: npm publish --provenance --access public
+      # Retries after a successful publish used to 403 on "cannot publish over
+      # the previously published version". Skip when that version is already
+      # on the registry so the GitHub release step can still finish.
+      - name: publish to npm (skip if already published)
+        run: |
+          name="$(node -p "require('./package.json').name")"
+          version="$(node -p "require('./package.json').version")"
+          if npm view "${name}@${version}" version >/dev/null 2>&1; then
+            echo "${name}@${version} is already on the registry; skipping publish"
+          else
+            npm publish --provenance --access public
+          fi
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
 
+      # Draft releases (e.g. from the GitHub UI) make bare `gh release create`
+      # fail with HTTP 422 "Release.tag_name already exists". Create or update.
       - name: GitHub release with the changelog section
         run: |
+          tag="${{ github.event.inputs.tag || github.ref_name }}"
           version="$(node -p "require('./package.json').version")"
           awk -v v="$version" '
             $0 ~ "^## \\[?"v {found=1; next}
@@ -61,7 +77,13 @@ jobs:
           if [ ! -s release-notes.md ]; then
             echo "See CHANGELOG.md" > release-notes.md
           fi
-          gh release create "${{ github.event.inputs.tag || github.ref_name }}" \
-            --title "v$version" --notes-file release-notes.md
+          if gh release view "$tag" >/dev/null 2>&1; then
+            gh release edit "$tag" \
+              --title "v$version" --notes-file release-notes.md \
+              --draft=false --latest
+          else
+            gh release create "$tag" \
+              --title "v$version" --notes-file release-notes.md --latest
+          fi
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
