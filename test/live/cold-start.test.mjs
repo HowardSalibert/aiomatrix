@@ -9,7 +9,8 @@ const env = liveEnv();
 
 describe("live cold start", { skip: !env }, () => {
   it("bootstrap after wiping sync.json does not re-dispatch old timeline messages", async () => {
-    const first = await createLiveBot(env, "bot");
+    // Crypto off: this suite only checks sync bootstrap / dispatch, not Megolm.
+    const first = await createLiveBot(env, "bot", { crypto: false });
     const dir = first.storagePath;
 
     const router = new Router();
@@ -31,7 +32,7 @@ describe("live cold start", { skip: !env }, () => {
       name: `cold-start-${Date.now()}`,
     });
 
-    const peer = await createLiveBot(env, "peer");
+    const peer = await createLiveBot(env, "peer", { crypto: false });
     const peerDp = new Dispatcher();
     peerDp.include(new Router());
     await peer.bot.start(peerDp);
@@ -47,10 +48,9 @@ describe("live cold start", { skip: !env }, () => {
     await peer.bot.stop();
     await peerDp.close();
 
-    // Cold start: drop sync token, keep crypto/session.
     fs.rmSync(path.join(dir, "sync.json"), { force: true });
 
-    const second = await createLiveBot(env, "bot", { storagePath: dir });
+    const second = await createLiveBot(env, "bot", { storagePath: dir, crypto: false });
     const seenAfter = [];
     const router2 = new Router();
     const dispatcher2 = new Dispatcher();
@@ -61,7 +61,7 @@ describe("live cold start", { skip: !env }, () => {
     });
 
     await second.bot.start(dispatcher2);
-    // Bootstrap + one runtime sync cycle.
+    // Bootstrap + a couple of runtime sync cycles — no new traffic yet.
     await sleep(8_000);
 
     assert.equal(
@@ -70,7 +70,19 @@ describe("live cold start", { skip: !env }, () => {
       `cold start re-dispatched old message: ${JSON.stringify(seenAfter)}`,
     );
 
+    // Sync is alive: a fresh message after bootstrap must still arrive.
+    const peer2 = await createLiveBot(env, "peer", { crypto: false });
+    const peer2Dp = new Dispatcher();
+    peer2Dp.include(new Router());
+    await peer2.bot.start(peer2Dp);
+    const fresh = `fresh-${Date.now()}`;
+    await peer2.bot.client.sendText(roomId, fresh);
+    await sleep(5_000);
+    assert.ok(seenAfter.includes(fresh), `runtime sync missed ${fresh}: ${JSON.stringify(seenAfter)}`);
+
     await second.bot.stop();
     await dispatcher2.close();
+    await peer2.bot.stop();
+    await peer2Dp.close();
   });
 });

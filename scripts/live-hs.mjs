@@ -128,15 +128,21 @@ async function main() {
       MATRIX_PEER_PASSWORD: peerPass,
     };
 
-    exitCode = await new Promise((resolve) => {
-      console.log(`+ node --test ${liveTests.join(" ")}`);
-      const child = spawn(process.execPath, ["--test", ...liveTests], {
-        cwd: root,
-        env,
-        stdio: "inherit",
+    // One Matrix account is shared across suites; run files sequentially so
+    // rooms/devices from Megolm do not leak into cold-start assertions.
+    exitCode = 0;
+    for (const file of liveTests) {
+      const code = await new Promise((resolve) => {
+        console.log(`+ node --test ${file}`);
+        const child = spawn(process.execPath, ["--test", file], {
+          cwd: root,
+          env,
+          stdio: "inherit",
+        });
+        child.on("exit", (c) => resolve(c ?? 1));
       });
-      child.on("exit", (code) => resolve(code ?? 1));
-    });
+      if (code !== 0) exitCode = code;
+    }
   } finally {
     try {
       run("docker", ["compose", "-f", composeFile, "down", "-v"]);
