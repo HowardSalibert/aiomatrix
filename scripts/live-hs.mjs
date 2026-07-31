@@ -17,9 +17,14 @@ const botPass = "live-bot-pass-32chars!!!!!!!!";
 const peerPass = "live-peer-pass-32chars!!!!!!!";
 const serverName = "localhost";
 
-function run(cmd, args) {
+function run(cmd, args, options = {}) {
   console.log(`+ ${cmd} ${args.join(" ")}`);
-  execFileSync(cmd, args, { stdio: "inherit", cwd: root });
+  execFileSync(cmd, args, { stdio: "inherit", cwd: root, ...options });
+}
+
+function runCapture(cmd, args) {
+  console.log(`+ ${cmd} ${args.join(" ")}`);
+  return execFileSync(cmd, args, { encoding: "utf8", cwd: root, stdio: ["ignore", "pipe", "pipe"] });
 }
 
 function registerUser(localpart, password) {
@@ -40,9 +45,8 @@ function registerUser(localpart, password) {
     password,
     "--no-admin",
   ];
-  console.log(`+ docker ${args.join(" ")}`);
   try {
-    execFileSync("docker", args, { encoding: "utf8", cwd: root, stdio: ["ignore", "pipe", "pipe"] });
+    runCapture("docker", args);
   } catch (err) {
     const out = `${err.stdout ?? ""}${err.stderr ?? ""}${err.message ?? ""}`;
     if (/already|taken/i.test(out)) {
@@ -54,16 +58,32 @@ function registerUser(localpart, password) {
   }
 }
 
-async function waitForHomeserver(url, attempts = 60) {
+function dumpSynapseLogs() {
+  try {
+    console.log("--- docker compose ps ---");
+    run("docker", ["compose", "-f", composeFile, "ps", "-a"]);
+    console.log("--- docker compose logs (tail) ---");
+    run("docker", ["compose", "-f", composeFile, "logs", "--tail", "200"]);
+  } catch (err) {
+    console.warn("could not dump synapse logs", err);
+  }
+}
+
+async function waitForHomeserver(url, attempts = 90) {
   for (let i = 0; i < attempts; i++) {
     try {
       const res = await fetch(`${url}/_matrix/client/versions`);
-      if (res.ok) return;
-    } catch {
-      // not up yet
+      if (res.ok) {
+        console.log(`homeserver ready after ${i + 1} attempt(s)`);
+        return;
+      }
+      console.log(`wait ${i + 1}/${attempts}: HTTP ${res.status}`);
+    } catch (err) {
+      console.log(`wait ${i + 1}/${attempts}: ${err.cause?.code ?? err.message}`);
     }
     await new Promise((r) => setTimeout(r, 2_000));
   }
+  dumpSynapseLogs();
   throw new Error(`homeserver not ready at ${url}`);
 }
 
@@ -79,9 +99,22 @@ async function main() {
 
   let exitCode = 1;
   try {
+    // Empty volume: generate homeserver.yaml + signing key, then start.
+    run("docker", [
+      "compose",
+      "-f",
+      composeFile,
+      "run",
+      "--rm",
+      "-e",
+      "SYNAPSE_SERVER_NAME=localhost",
+      "-e",
+      "SYNAPSE_REPORT_STATS=no",
+      "synapse",
+      "generate",
+    ]);
     run("docker", ["compose", "-f", composeFile, "up", "-d"]);
     await waitForHomeserver(hsUrl);
-    await new Promise((r) => setTimeout(r, 3_000));
 
     registerUser(botUser, botPass);
     registerUser(peerUser, peerPass);
@@ -116,6 +149,7 @@ async function main() {
 
 main().catch((err) => {
   console.error(err);
+  dumpSynapseLogs();
   try {
     run("docker", ["compose", "-f", composeFile, "down", "-v"]);
   } catch {
