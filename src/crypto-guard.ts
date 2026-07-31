@@ -135,22 +135,18 @@ export async function assertPeersHaveKeys(
     total += countDevicesForUser(resp, peer);
   }
   if (total === 0) {
-    client.crypto?.emitCryptoLog({
-      type: "peer_keys_missing",
-      roomId,
-      peers,
-    });
-    if (!client.crypto) {
-      console.error(
-        `[matrixbots] PeerKeysMissingError: encrypted room ${roomId} — keys/query returned 0 device keys for peers: ${peers.join(", ")}. Message NOT sent.`,
-      );
-    }
+    client.crypto?.emitCryptoLog({ type: "peer_keys_missing", roomId, peers });
     throw new PeerKeysMissingError(roomId, peers);
   }
 }
 
 /**
- * Guarded send: never plaintext-fallback in encrypted rooms.
+ * Guarded send kept for backwards compatibility.
+ *
+ * `MatrixClient.sendEvent` already refuses to send plaintext into an encrypted
+ * room, so prefer it: this helper adds a `keys/query` round trip per message.
+ *
+ * @deprecated Use `client.sendText` / `ctx.answer`.
  */
 export async function guardedSendText(
   client: MatrixClient,
@@ -169,6 +165,7 @@ export async function guardedSendText(
   return client.sendText(roomId, text);
 }
 
+/** @deprecated Use `client.sendHtmlText` / `ctx.answerHtml`. */
 export async function guardedSendHtml(
   client: MatrixClient,
   roomId: string,

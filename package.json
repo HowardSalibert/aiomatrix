@@ -1,36 +1,61 @@
 {
   "name": "matrixbots",
-  "version": "0.2.0",
-  "description": "Aiogram-like DX for Matrix bots — own CS client + OlmMachine (no matrix-bot-sdk)",
+  "version": "0.3.0",
+  "description": "Aiogram-like framework for Matrix bots: routers, filters, FSM, inline keyboards, E2EE and MiniApps",
   "type": "module",
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
+  "sideEffects": false,
   "exports": {
     ".": {
       "types": "./dist/index.d.ts",
       "import": "./dist/index.js"
-    }
+    },
+    "./crypto": {
+      "types": "./dist/crypto.d.ts",
+      "import": "./dist/crypto.js"
+    },
+    "./miniapp": {
+      "types": "./dist/miniapp/index.d.ts",
+      "import": "./dist/miniapp/index.js"
+    },
+    "./package.json": "./package.json"
   },
   "files": [
     "dist",
+    "src",
     "README.md",
-    "LICENSE",
-    "AUDIT.md"
+    "MINIAPP.md",
+    "MIGRATION.md",
+    "CHANGELOG.md",
+    "AUDIT.md",
+    "LICENSE"
   ],
   "engines": {
-    "node": ">=20"
+    "node": ">=20.10"
   },
   "scripts": {
     "build": "tsc",
-    "test": "npm run build && node --test test/*.test.mjs",
+    "clean": "node -e \"require('node:fs').rmSync('dist', { recursive: true, force: true })\"",
+    "typecheck": "tsc --noEmit",
+    "test": "npm run build && node --test --test-timeout=40000 test/*.test.mjs",
+    "test:only": "node --test --test-timeout=40000 test/*.test.mjs",
     "dev": "tsx examples/echo/src/main.ts",
-    "prepublishOnly": "npm run build"
+    "prepublishOnly": "npm run clean && npm run build && npm run test:only"
   },
   "keywords": [
     "matrix",
+    "matrix-bot",
     "bot",
+    "bot-framework",
     "e2ee",
+    "olm",
+    "megolm",
     "aiogram",
+    "miniapp",
+    "webapp",
+    "widget",
+    "fsm",
     "matrixbots"
   ],
   "author": "Howard Salibert / StudNovSU contributors",
@@ -39,10 +64,15 @@
     "type": "git",
     "url": "git+https://github.com/HowardSalibert/matrixbots.git"
   },
-  "dependencies": {
+  "bugs": {
+    "url": "https://github.com/HowardSalibert/matrixbots/issues"
+  },
+  "homepage": "https://github.com/HowardSalibert/matrixbots#readme",
+  "optionalDependencies": {
     "@matrix-org/matrix-sdk-crypto-nodejs": "^0.4.0"
   },
   "devDependencies": {
+    "@matrix-org/matrix-sdk-crypto-nodejs": "^0.4.0",
     "@types/node": "^22.10.0",
     "tsx": "^4.19.2",
     "typescript": "^5.7.2"

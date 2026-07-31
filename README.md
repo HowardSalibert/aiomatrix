@@ -1,172 +1,350 @@
 # matrixbots
 
-**EN:** Aiogram-like DX for Matrix bots. Crypto is not an optional footgun — E2EE uses `@matrix-org/matrix-sdk-crypto-nodejs` (Rust OlmMachine) directly, never a hand-rolled Olm.
-
-**RU:** DX как у aiogram для Matrix-ботов. Крипто не «по желанию»: E2EE через `@matrix-org/matrix-sdk-crypto-nodejs` (OlmMachine напрямую), без самописного Olm.
-
-Status: **v0.2.0** — hardened sync/E2EE/HTTP (see [AUDIT.md](./AUDIT.md)). **No `matrix-bot-sdk`.**
-
-**Deps:** own Client-Server HTTP client + `@matrix-org/matrix-sdk-crypto-nodejs@0.4.x` (sole runtime dependency). Node `>=20`.
-
-## Architecture
-
-```
-┌─────────────────────────────────────────────────────────┐
-│  Bot / Dispatcher / Router / Command / F / FSM          │  ← public DX
-├─────────────────────────────────────────────────────────┤
-│  MatrixClient  (join, typing, send*, encrypt path)      │
-│  SyncLoop      (filter bootstrap, abort, backoff≤30s)   │
-│  MatrixHttp    (timeouts, AbortSignal, MatrixApiError)  │
-├─────────────────────────────────────────────────────────┤
-│  CryptoEngine → OlmMachine (Rust)                       │
-│  outgoing: upload/query/claim/to-device/signatures       │
-│  Megolm encrypt/decrypt; history_visibility-aware share │
-└─────────────────────────────────────────────────────────┘
-```
-
-## E2EE contract
-
-1. With `crypto: true` (default): init OlmMachine under `storagePath/crypto`, `prepareCrypto` (flush outgoing), verify **own** device keys via `keys/query` (5 attempts, backoff 300–2400ms). Missing → `CryptoNotReadyError`.
-2. Config `deviceId` (or `storagePath/device.json`) must match crypto device after prepare → else `DeviceMismatchError`. Whoami without `device_id` does not fail before prepare.
-3. Before send into an encrypted room: `keys/query` joined human peers; zero device keys → `PeerKeysMissingError`, **do not send**. Then claim sessions, `shareRoomKey` with configurable bot `encryption` policy (room `history_visibility`), encrypt as `m.room.encrypted`. All withheld / zero-share → `RoomKeyWithheldError` (see [E2EE share policy](#e2ee-share-policy)).
-4. Never plaintext-fallback in encrypted rooms. Reactions use the same `sendEvent` encrypt path.
-5. Cold sync: filter `timeline.limit: 0` + skip handler dispatch on bootstrap; `bootstrap_done` in `sync.json`.
-6. `bot.cryptoReady: boolean` after successful verification.
-
-## v0.2 hardening (summary)
-
-- Sync bootstrap / no history flood; autojoin invites; limited-timeline state refresh
-- ToDevice `{ messages }` normalization; KeysBackup never stalls the queue
-- HTTP 60s timeout + AbortController on sync stop; auth fatal stops the loop
-- Device persistence (`device.json`); optional `cryptoStorePassphrase`; `autojoin`
-- Event dedup (512), per-room/global dispatch queue, path-traversal refuse on `storagePath`
-- Mentions helper `F.mention` / `mentioned`; `setTyping`; `joinRoom`; exported `MatrixApiError`
-
-Full findings → [AUDIT.md](./AUDIT.md).
-
-## XSS / HTML trust boundary
-
-`sendHtmlText` / `ctx.replyHtml` send `formatted_body` to Matrix as markup. This library does **not** execute HTML; Matrix clients may render it. **Bot authors are responsible** for sanitizing any untrusted HTML before calling these APIs.
-
-## Quickstart
+An aiogram-style framework for Matrix bots: routers, filters, FSM, middleware, inline keyboards,
+end-to-end encryption, and a MiniApp platform modelled on Telegram WebApps.
 
 ```bash
-cd Z:\MatrixBots
-npm install
-npm run build
-npm test
-
-cd examples\echo
-copy .env.example .env
-# fill MATRIX_HS_URL, MATRIX_ACCESS_TOKEN, MATRIX_DEVICE_ID
-npm install
-npx tsx src/main.ts
+npm install matrixbots
+# optional: end-to-end encryption (native bindings, skip on unsupported platforms)
+npm install @matrix-org/matrix-sdk-crypto-nodejs
 ```
 
-### Minimal bot
+Node >= 20.10, ESM only.
+
+## Hello bot
 
 ```ts
-import {
-  Bot,
-  Dispatcher,
-  Router,
-  Command,
-  F,
-  MemoryStorage,
-  createStates,
-} from 'matrixbots';
+import { Bot, Dispatcher, Router, Command, F } from "matrixbots";
 
 const bot = await Bot.create({
-  homeserverUrl: process.env.MATRIX_HS_URL!,
-  accessToken: process.env.MATRIX_ACCESS_TOKEN!,
-  deviceId: process.env.MATRIX_DEVICE_ID!, // REQUIRED when crypto enabled (or device.json)
-  storagePath: './data',
-  crypto: true, // default true
-  autojoin: true, // default true
+  homeserverUrl: "@mybot:example.org", // user id, server name, or full URL
+  password: process.env.MATRIX_PASSWORD,
+  crypto: true,
 });
 
-const dp = new Dispatcher({ storage: new MemoryStorage() });
-const router = new Router('main');
+const router = new Router();
 
-router.message(Command('echo'), async (ctx) => {
-  await ctx.reply(ctx.commandArgs.trim() || '…');
+router.message(Command("start"), async (ctx) => {
+  await ctx.reply("Hi! Send me anything and I'll echo it.");
 });
 
-router.message(F.mention('MyBot'), async (ctx) => {
-  await ctx.reply('You mentioned me');
+router.message(F.text.startsWith("echo "), async (ctx) => {
+  await ctx.reply(ctx.text.slice(5));
 });
 
+const dp = new Dispatcher();
 dp.include(router);
-await bot.start(dp);
+
+await bot.run(dp); // syncs until SIGINT/SIGTERM, then shuts down cleanly
 ```
 
-## E2EE share policy
+`homeserverUrl` accepts a URL, a bare server name, or the bot's user id; server names and user ids
+are resolved through `/.well-known/matrix/client`. With `password` the SDK logs in, persists the
+session under `storagePath` (default `./data`), and reuses the same device id on restart — which is
+what E2EE requires.
 
-These settings are **bot/client `EncryptionSettings`** passed into OlmMachine `shareRoomKey`. They are **not** Synapse homeserver config (`encryption` section / room state). Changing them only affects how *this* bot shares megolm session keys with peer devices.
+## Concepts
 
-### Defaults (bots)
+| Piece | Role |
+|---|---|
+| `Bot` | Owns the client, E2EE contract, callback/MiniApp registries, and scheduler |
+| `Dispatcher` | Global middleware, routing, stats, error handling, handler timeouts |
+| `Router` | Groups handlers per update type; nestable via `include()` |
+| `Context` | Typed per-update object with `reply`, `answer`, FSM state, room metadata |
+| `Filter` | Predicate over a context; compose with `and` / `or` / `not` |
+| `FSMContext` | Per-user/room conversation state with pluggable storage and TTL |
 
-| Option | Default | Meaning |
-|---|---|---|
-| `onlyAllowTrustedDevices` | `false` | Share megolm with unverified human devices (normal for bots). |
-| `errorOnVerifiedUserProblem` | `false` | Do not fail the share when a verified user has an unverified device. |
+### Update types
 
-If you leave the Rust/SDK defaults (`onlyAllowTrustedDevices: true`), peers often get `m.room_key.withheld` instead of a key — ciphertext they cannot decrypt until a later share (feels like “bot replies on my next message”).
+Handlers register per update type, so a reaction handler never sees a message:
 
-### Tighten for verified-only communities
+```ts
+router.message(F.text, onMessage);          // new messages
+router.editedMessage(onEdit);               // m.replace edits
+router.anyMessage(onEither);
+router.callbackQuery(F.callback.startsWith("vote:"), onVote);
+router.reaction(F.reaction.key("👍"), onThumbsUp);
+router.miniAppData(onMiniAppData);
+router.membership(F.membership.joined, onJoin);
+router.invite(onInvite);
+router.redaction(onRedaction);
+router.pollResponse(onPollResponse);
+router.toDevice(onToDevice);
+router.rawEvent(onAnythingElse);            // custom event types
+router.on(["message", "reaction"], onBoth); // explicit types
+```
+
+### Filters
+
+`F` composes fluently; every leaf is a plain function, so custom filters need no base class.
+
+```ts
+import { F, and, not, Command } from "matrixbots";
+
+F.text;                          // any non-empty body
+F.text.contains("deploy");       // also .equals .startsWith .endsWith .in .len
+F.text.regexp(/^(\d+)$/);        // match lands in ctx.data.match
+F.image;                         // also .video .audio .file .location .emote .notice
+F.hasAttachment;
+F.reply;                         // is a rich reply
+F.thread;
+F.mentionsMe;                    // bot mentioned via m.mentions or plain text
+F.room.dm;                       // also .group .is(id) .in(ids) .encrypted
+F.from.user("@alice:example.org"); // also .users([...]) .server("example.org") .self
+F.hasPower(50);                  // also F.isModerator, F.isAdmin
+F.callback.startsWith("vote:");  // also .data(...) .regexp()
+F.miniApp.action("submit");      // also .app(id) .field(name, value?)
+F.membership.joined;             // also .left .banned .invited .isSelf .is(...)
+
+and(F.room.dm, not(F.room.encrypted));
+
+// Aliases are extra names; the first is canonical.
+Command(["help", "помощь"], { prefixes: ["/", "!"], description: "Show help" });
+```
+
+Commands are Unicode-normalized (NFC), so `/помощь` works regardless of how the client composed the
+characters. Recognized forms are `/name`, `!name`, `name@bot`, `bot: name`, and — in direct chats — a
+bare `name`. `Command` also accepts `description`, `args`, `minPowerLevel`, `scope`, `hidden`, and
+`category`, which feed the generated help (`bot.helpText()`) and the command list advertised to clients
+(`bot.advertiseCommands(roomId)`).
+
+### FSM
+
+```ts
+import { createStates } from "matrixbots";
+
+const Form = createStates("form", ["name", "age"] as const);
+
+router.message(Command("register"), async (ctx) => {
+  await ctx.state.setState(Form.name);
+  await ctx.reply("What's your name?");
+});
+
+router.message(Form.name, F.text, async (ctx) => {
+  await ctx.state.updateData({ name: ctx.text });
+  await ctx.state.setState(Form.age);
+  await ctx.reply("How old are you?");
+});
+
+router.message(Form.age, F.text, async (ctx) => {
+  const { name } = await ctx.state.getData<{ name: string }>();
+  await ctx.state.clear();
+  await ctx.reply(`Thanks, ${name}!`);
+});
+```
+
+Storage defaults to memory. For state that survives restarts:
+
+```ts
+import { Dispatcher, JsonFileStorage } from "matrixbots";
+
+const dp = new Dispatcher({
+  storage: new JsonFileStorage("./data/fsm.json"),
+  fsmStrategy: "user_in_room", // or "room" | "user" | "global"
+});
+```
+
+### Middleware
+
+```ts
+import { throttle, accessControl, typingIndicator, errorReply, logging, i18n } from "matrixbots";
+
+dp.use(logging());
+dp.use(throttle({ limit: 5, windowMs: 10_000 }));
+dp.use(accessControl({ allowServers: ["example.org"] }));
+dp.use(typingIndicator());
+dp.use(errorReply({ text: "Something broke, try again." }));
+router.use(i18n({ catalogs, defaultLocale: "en" }));
+```
+
+Middleware runs outside-in and can short-circuit by not calling `next()`.
+
+### Inline keyboards
+
+Matrix has no native inline keyboards, so this ships a convention (`m.matrixbots.keyboard`) plus a
+plain-text fallback so clients that don't understand it still show usable buttons.
+
+```ts
+import { InlineKeyboard } from "matrixbots";
+
+const kb = new InlineKeyboard()
+  .text("Yes", "vote:yes")
+  .text("No", "vote:no")
+  .row()
+  .url("Docs", "https://example.org/docs");
+
+await ctx.reply("Ship it?", { keyboard: kb });
+
+router.callbackQuery(F.callback.startsWith("vote:"), async (ctx) => {
+  await ctx.answerCallback({ text: "Recorded" });
+  await ctx.editMessageText(`You voted ${ctx.callbackData.split(":")[1]}`);
+});
+```
+
+Callback tokens are random, single-use by default, bound to the room and to the user the keyboard was
+sent to, so a token leaked from one room cannot be replayed in another.
+
+### Media
+
+```ts
+await bot.client.sendFile(ctx.roomId, pngBytes, {
+  filename: "plot.png",
+  caption: "Latest numbers",
+});
+await bot.client.sendFileFromPath(ctx.roomId, "./report.pdf");
+
+if (ctx.attachment) {
+  const bytes = await ctx.downloadAttachment(); // decrypts when needed
+}
+```
+
+Uploads and downloads handle encrypted attachments (`m.file` blocks with AES-CTR keys) transparently:
+in an encrypted room `sendFile` encrypts before upload, and `downloadAttachment` verifies the hash
+and decrypts.
+
+### Scheduler
+
+```ts
+bot.scheduler.every(60_000, async () => { /* ... */ }, { name: "poll-feed" });
+bot.scheduler.dailyAt("09:00", async () => {
+  await bot.sendMessage(roomId, "Standup time");
+}, "standup");
+bot.scheduler.after(5_000, () => bot.sendMessage(roomId, "Five seconds later"));
+```
+
+Jobs never overlap themselves, errors are logged rather than fatal, and everything stops with the bot.
+
+## End-to-end encryption
+
+E2EE uses the Rust crypto machine directly (`@matrix-org/matrix-sdk-crypto-nodejs`), which is an
+**optional** dependency: `import "matrixbots"` works on platforms with no prebuilt binary as long as
+you run with `crypto: false`. Requesting crypto without the package throws a `ConfigurationError`
+that says exactly what to install.
+
+The contract the SDK enforces before dispatching anything, so a bot can never quietly leak plaintext:
+
+1. Device id must be stable. Password login persists it; `crypto: true` with a mismatched
+   `deviceId` fails fast with `DeviceMismatchError`.
+2. Own device keys must be uploaded and queryable (`assertOwnDeviceKeysReady`, 5 attempts).
+3. Room encryption state is resolved through the room cache. If the homeserver's answer is
+   *unknown* (429, network error) the send throws `EncryptionStateUnknownError` instead of falling
+   back to plaintext.
+4. Megolm sessions are shared with tracked peer devices, excluding the bot's own device, with the
+   share set cached and invalidated on device-list changes.
 
 ```ts
 const bot = await Bot.create({
-  homeserverUrl: process.env.MATRIX_HS_URL!,
-  accessToken: process.env.MATRIX_ACCESS_TOKEN!,
-  deviceId: process.env.MATRIX_DEVICE_ID!,
+  homeserverUrl: "example.org",
+  userId: "@mybot:example.org",
+  password: process.env.MATRIX_PASSWORD,
+  crypto: true,
+  cryptoStorePassphrase: process.env.CRYPTO_PASSPHRASE, // encrypts the store at rest
+  keyBackup: true,
   encryption: {
-    onlyAllowTrustedDevices: true,
-    errorOnVerifiedUserProblem: true,
+    onlyAllowTrustedDevices: false, // bots normally can't verify anyone
+    rotateEveryMessage: false,
+    rotationPeriodMessages: 100,
+    reshareOnDeviceChange: true,
   },
+  onCryptoLog: (event) => console.log("[crypto]", event.type, event),
 });
 ```
 
-### Crypto logs (`onCryptoLog`)
+**Resetting crypto.** Delete `storagePath/crypto` *and* log in fresh (or pass a new `deviceId`).
+A crypto store from a different device id is unusable, and keeping it produces undecryptable
+messages for peers.
 
-When keys are withheld or peers cannot decrypt, matrixbots emits structured events (and mirrors important ones to `console`):
+## MiniApps
+
+The MiniApp platform gives Matrix the Telegram WebApp developer experience: a signed launch payload,
+a `window.MatrixMiniApp` bridge (aliased as `window.Telegram.WebApp` so existing mini apps mostly
+just work), a framework-agnostic backend, and Matrix widgets for clients that embed apps inline.
 
 ```ts
-import type { CryptoLogEvent } from 'matrixbots';
+// bot side: post a launch card with a signed, per-user URL
+await bot.sendMiniApp(ctx.roomId, {
+  userId: ctx.senderId,
+  title: "Order form",
+  url: "https://app.example.org/order",
+});
 
-const bot = await Bot.create({
-  // ...
-  onCryptoLog: (event: CryptoLogEvent) => {
-    // share_room_key | withheld_detail | peer_keys_missing | encrypt_send | warn | error
-    console.log('[crypto]', event);
-  },
+// receive what the mini app sent back
+router.miniAppData(F.miniApp.action("submit"), async (ctx) => {
+  const { items } = ctx.payload as { items: string[] };
+  await ctx.answerWebAppQuery(`Got ${items.length} items`);
 });
 ```
 
-- `withheld_detail` — truncated to-device body (max 500 chars) so you see withheld codes / user ids.
-- `share_room_key` — `keyShares` vs `withheld` counts + resolved policy.
-- If `keyShares === 0` and `withheld > 0` → throws `RoomKeyWithheldError` (sending a new session would be useless). If some keys were shared, withheld ghost devices only produce a warn.
+```ts
+// backend: validate the launch, mint a session, route sendData into the dispatcher
+const server = bot.createMiniAppServer({ allowedOrigins: ["https://app.example.org"] });
+http.createServer(server.nodeHandler()).listen(8080);
+```
 
-## Commands
+Launch data is HMAC-SHA256 signed with the bot's secret (auto-generated into
+`storagePath/miniapp.json` if you don't supply one), carries a TTL, and is single-use by default so a
+copied URL cannot be replayed. The browser bridge pins the host origin rather than posting to `*`.
 
-`Command('echo')` matches `/echo`, `!echo`, and in DMs also bare `echo` as the first token. Args land in `ctx.commandArgs`.
+Full walkthrough, protocol details, and a client example: [MINIAPP.md](./MINIAPP.md).
 
-### Command specs for host autocomplete
+## Security notes
 
-Interactive Tab / slash UI is the **host client's** job. matrixbots can export specs for hosts to wire into autocomplete:
+- **HTML is a trust boundary.** `ctx.reply(text)` is plain text and always safe. `ctx.replyHtml`
+  sends HTML; run untrusted input through `sanitizeMatrixHtml()`, or build it with the `html`
+  tagged template, which escapes interpolations for you.
+- **Plain HTTP is refused.** The access token travels on every request, so a non-localhost `http://`
+  homeserver throws `ConfigurationError` unless you set `allowInsecureHomeserver: true`.
+- **No secrets are logged.** Access tokens, `Authorization` headers, and full sync bodies never
+  reach the logger, at any level.
+- **Storage holds credentials.** `storagePath` contains the session, device id, crypto store, and
+  MiniApp secret. Keep it out of version control and off shared volumes.
+
+## Operations
 
 ```ts
-import { defineCommands, matchCommand } from 'matrixbots';
+bot.getHealth();
+// { running, cryptoEnabled, cryptoReady, userId, deviceId,
+//   lastSyncAtMs, syncAgeMs, roomsCached, pendingCallbacks,
+//   pendingMiniAppQueries, scheduledJobs }
 
-const commands = defineCommands([
-  { name: 'echo', aliases: ['say'], description: 'Repeat text', args: '<text>' },
-  { name: 'help', description: 'List commands' },
-]);
-
-const hit = matchCommand('/echo hi', commands);
-// → { spec: commands[0], args: 'hi' }
+dp.getStats(); // { received, handled, unhandled, errors, timeouts }
 ```
+
+Handler failures go to the dispatcher's error handler; return `true` to mark one handled:
+
+```ts
+dp.errors((err, ctx) => {
+  metrics.increment("handler_error", { update: ctx?.updateType });
+  return true;
+});
+dp.fallback(async (ctx) => ctx.answer("I didn't understand that."));
+```
+
+`syncAgeMs` is the liveness signal worth alerting on: a running bot that has not synced in several
+minutes is wedged even though the process is up.
+
+Wire `onFatal` for unrecoverable states (revoked token, deleted device); the sync loop stops instead
+of spinning:
+
+```ts
+await Bot.create({ /* ... */, onFatal: (err) => { console.error(err); process.exit(1); } });
+```
+
+## Subpath exports
+
+```ts
+import { Bot } from "matrixbots";              // everything except the native crypto class
+import { CryptoEngine } from "matrixbots/crypto"; // needs the optional native package
+import { validateInitData } from "matrixbots/miniapp";
+```
+
+## Docs
+
+- [MINIAPP.md](./MINIAPP.md) — MiniApp protocol, bridge API, backend, widgets
+- [MIGRATION.md](./MIGRATION.md) — upgrading from 0.2.x
+- [CHANGELOG.md](./CHANGELOG.md)
+- [AUDIT.md](./AUDIT.md) — hardening cycles and residual risks
 
 ## License
 
-MIT — Copyright Howard Salibert / StudNovSU contributors.
+MIT

@@ -1,6 +1,6 @@
 # MatrixBots audit log
 
-Five hardening cycles (crypto / sync / HTTP / DX / ship). Residual risks that need live HS smoke are listed under each cycle and summarized at the end.
+Seven hardening cycles (crypto / sync / HTTP / DX / ship / RU-bots / publish). Residual risks that need live HS smoke are listed under each cycle and summarized at the end.
 
 ---
 
@@ -144,6 +144,87 @@ Problems found / ship gaps:
 - Autojoin invite round-trip.
 - 401 stops loop without spinning.
 - APK/mobile N/A (this package is Node SDK only).
+
+---
+
+## Cycle 6 (v0.2.1)
+
+Hardening for public consumers / RU bots:
+
+1. **Fail-fast device mismatch** — `createMatrixClient` throws `DeviceMismatchError` when both `options.deviceId` and whoami `device_id` are set and differ (no soft-allow).
+2. **Cyrillic NFC command normalize** — exported `normalizeCommandName` (`NFC` + lower + strip `/!` + before `:`); `Command` / `parseCommandToken` / `matchCommand` / `suggestCommands` all fold through it; Unicode `\S+` kept; tests for `!сводка`, `/помощь`, aliases, prefix suggest, NFD≡NFC.
+3. **RoomKeyWithheldError** message includes `rotateEveryMessage` alongside the other policy flags.
+4. **Docs** — device/crypto wipe ops (wipe `storagePath/crypto` + set login `device_id`); prefer `Bot`/`ctx.reply`; quickstart notes packages ↔ `Z:\MatrixBots` must stay identical at v0.2.1.
+5. Prior E2EE surface confirmed: self-exclude megolm recipients, `rotateEveryMessage` default, DeviceLists dirty before KeysQuery (Cycles / share-policy work).
+
+### Cycle 6 residual
+
+- Live HS smoke still human-only (see Cycle 5 residual).
+- Publish to npm is out of band (tests green ≠ published).
+
+---
+
+## Cycle 7 (v0.3.0) — pre-publication audit
+
+Full-project sweep for bottlenecks, illogical behaviour, leaks, vulnerabilities, and unfinished work.
+
+### Vulnerabilities
+
+| # | Issue | Impact | Fix |
+|---|---|---|---|
+| 1 | `isRoomEncrypted` cached `false` on *any* error (429, network) | Plaintext into an encrypted room, permanently for the process | Sync-backed `RoomCache`; only a 404 means "not encrypted", otherwise `EncryptionStateUnknownError` |
+| 2 | Callback tokens not bound to a room | Token captured in room A replayed in room B | Token check includes `roomId` + issued-to user; single-use by default; CSPRNG tokens |
+| 3 | MiniApp bridge used `postMessage(msg, "*")` and accepted any sender | Any frame/opener could read `sendData` payloads and inject host messages | Post only to the launching window; optional `matrixWebAppHost` pin; reject foreign windows/origins |
+| 4 | Plain-HTTP homeserver only warned | Access token sent unencrypted | `ConfigurationError` unless `allowInsecureHomeserver` |
+| 5 | Button / MiniApp-card URLs unvalidated | `javascript:` URL in a button | `isSafeButtonUrl` on every button and launch URL |
+| 6 | `fingerprintSet` joined members with `\0` | Two device sets could collide → a needed Megolm re-share suppressed | Length-prefixed encoding |
+| 7 | `txnId()` = timestamp + counter | Collision across restarts → dropped or duplicated events | Random UUID prefix |
+| 8 | MiniApp launches replayable | A copied URL authenticates forever | Nonce + TTL + single-use `/auth`; timing-safe HMAC compare |
+
+### Bottlenecks
+
+| # | Issue | Fix |
+|---|---|---|
+| 1 | `rotateEveryMessage: true` default re-shared Megolm to every device per message, with a `/keys/query` per send | Default `false`; share sets cached per room, invalidated on device-list change |
+| 2 | Room state re-fetched over HTTP inside filters | `RoomCache` populated from `/sync`, LRU-bounded |
+| 3 | `EventDeduper` used `Array.shift()` (O(n) per event) | Head pointer, amortized O(1) |
+| 4 | `DispatchQueue.release()` woke every waiter | Wake exactly one |
+| 5 | No 429 handling — retried immediately into the same limit | `retry_after_ms` honoured; exponential backoff with jitter for 5xx |
+
+### Logic errors and unfinished work
+
+| # | Issue | Fix |
+|---|---|---|
+| 1 | Runtime filter upload failure left the bot on `timeline.limit: 0` forever — silently deaf | Persisted filter kind compared with desired kind, re-uploaded on mismatch |
+| 2 | `receiveSyncChanges` output discarded → decrypted to-device events lost | `onToDeviceEvents` / `onDecryptRecovered` handlers |
+| 3 | Events that could not be decrypted yet were dropped | Bounded retry queue, re-attempted when keys arrive |
+| 4 | Sync backoff not abortable → `stop()` could hang for 30s | `sleep(ms, signal)` |
+| 5 | `sync.json` / `device.json` written non-atomically | `writeJsonAtomic` for all persisted state |
+| 6 | `resolveSafeStoragePath` rejected legitimate absolute paths containing `..` | Only reject traversal in relative paths |
+| 7 | No token refresh; expired tokens looped | `refreshAccessToken` + `AuthenticationError` → `onFatal` |
+| 8 | Only `message` updates existed; reactions, callbacks, membership, redactions had nowhere to go | 11 update types with typed contexts and router methods |
+| 9 | No graceful shutdown for in-flight handlers | `DispatchQueue.drain(timeout)`, `bot.run()` signal handling |
+
+### Universal compatibility
+
+- Native E2EE bindings moved to `optionalDependencies` and loaded on demand, so `import "matrixbots"`
+  works where no prebuilt binary exists. Verified by removing `node_modules/@matrix-org` and importing
+  the root entry (CI job `no-native-crypto`).
+- Homeserver discovery via `.well-known`, so `homeserverUrl` accepts a URL, a server name, or a user id.
+- CI matrix: Node 20.10 / 22 / 24 on Linux, Windows, macOS.
+
+### Testing
+
+580 tests over 121 suites, covering every module. Two test-harness bugs were fixed along the way: a
+mock `fetch` that resolved synchronously starved the microtask queue and hung the sync tests, and a
+`/sync` mock that returned immediately produced a busy loop instead of long-polling.
+
+### Cycle 7 residual
+
+- Live HS smoke remains human-only (see Cycle 5 residual).
+- MiniApp launch flow has no client-side integration test against a real Matrix client; the bridge is
+  tested against a DOM stub.
+- Key backup is implemented but not exercised against a real backup version.
 
 ---
 
