@@ -163,6 +163,12 @@ export class MatrixClient {
   private readonly deduper = new EventDeduper(2_048);
   private readonly queue: DispatchQueue;
   private readonly knownRooms = new Set<string>();
+  /**
+   * Rooms seen during cold-start bootstrap. The first runtime sync after the
+   * filter switches from `timeline.limit: 0` to N may replay recent history;
+   * suppress that once so handlers do not re-answer old messages.
+   */
+  private readonly suppressTimelineRooms = new Set<string>();
   private readonly options: MatrixClientOptions;
   private syncLoop: SyncLoop | null = null;
   private handlers: ClientHandlers = {};
@@ -1200,7 +1206,17 @@ export class MatrixClient {
     }
 
     // Bootstrap: warm crypto/state only, never replay history into handlers.
-    if (isBootstrap) return;
+    if (isBootstrap) {
+      this.suppressTimelineRooms.add(roomId);
+      return;
+    }
+
+    if (this.suppressTimelineRooms.delete(roomId)) {
+      this.logger.debug(
+        `suppressing post-bootstrap timeline replay in ${roomId} (${timeline.length} event(s))`,
+      );
+      return;
+    }
 
     for (const event of timeline) {
       await this.emitTimelineEvent(roomId, event, gapped);
