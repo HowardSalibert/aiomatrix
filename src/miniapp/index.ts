@@ -22,6 +22,7 @@ export {
   MINI_APP_SCHEMA_VERSION,
   buildMiniAppContent,
   buildMiniAppDataContent,
+  displayUrlForMiniApp,
   parseMiniAppContent,
   parseMiniAppDataContent,
   parseMiniAppJson,

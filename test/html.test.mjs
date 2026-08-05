@@ -1,6 +1,6 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
-import { fmt, html, sanitizeMatrixHtml } from "../dist/index.js";
+import { fmt, html, markdownToHtml, sanitizeMatrixHtml } from "../dist/index.js";
 
 describe("sanitizeMatrixHtml", () => {
   it("keeps spec-allowed markup", () => {
@@ -96,5 +96,28 @@ describe("fmt and html helpers", () => {
       fmt.userPill("@alice:example.org", "Alice"),
       '<a href="https://matrix.to/#/%40alice%3Aexample.org">Alice</a>',
     );
+  });
+});
+
+describe("markdownToHtml", () => {
+  it("renders bold, italic, code and links", () => {
+    const out = markdownToHtml("**bold** and *italic* plus `code`");
+    assert.match(out, /<strong>bold<\/strong>/);
+    assert.match(out, /<em>italic<\/em>/);
+    assert.match(out, /<code>code<\/code>/);
+    assert.match(
+      markdownToHtml("[docs](https://example.org/x)"),
+      /<a href="https:\/\/example\.org\/x">docs<\/a>/,
+    );
+  });
+
+  it("escapes raw HTML in markdown input", () => {
+    assert.ok(!markdownToHtml("hi <script>x</script>").includes("<script>"));
+    assert.match(markdownToHtml("hi <script>x</script>"), /&lt;script&gt;/);
+  });
+
+  it("keeps fenced code blocks", () => {
+    const out = markdownToHtml("```js\nconst x = 1;\n```");
+    assert.match(out, /<pre><code class="language-js">const x = 1;<\/code><\/pre>/);
   });
 });

@@ -280,6 +280,50 @@ export function html(strings: TemplateStringsArray, ...values: unknown[]): strin
   return out;
 }
 
+/**
+ * Lightweight Markdown → Matrix HTML for `answer` / `reply` with
+ * `parseMode: "markdown"`.
+ *
+ * Supports `**bold**`, `*italic*` / `_italic_`, `` `code` ``, fenced code
+ * blocks, and `[label](https://…)` links. Not a full CommonMark parser —
+ * enough for bot copy without dragging a dependency.
+ */
+export function markdownToHtml(text: string): string {
+  if (!text) return "";
+  const fences: string[] = [];
+  const inlines: string[] = [];
+  let work = text.replace(/```([a-zA-Z0-9_+-]*)\n?([\s\S]*?)```/g, (_m, lang: string, code: string) => {
+    const i = fences.length;
+    const cls = lang ? ` class="language-${escapeHtml(lang)}"` : "";
+    fences.push(`<pre><code${cls}>${escapeHtml(code.replace(/\n$/, ""))}</code></pre>`);
+    return `\u0000F${i}\u0000`;
+  });
+  work = work.replace(/`([^`\n]+)`/g, (_m, code: string) => {
+    const i = inlines.length;
+    inlines.push(`<code>${escapeHtml(code)}</code>`);
+    return `\u0000C${i}\u0000`;
+  });
+  work = escapeHtml(work);
+  work = work.replace(/\[([^\]]+)\]\((https?:\/\/[^)\s]+)\)/g, (_m, label: string, url: string) =>
+    isSafeUrl(url, ALLOWED_HREF_SCHEMES)
+      ? `<a href="${escapeHtml(url)}">${label}</a>`
+      : label,
+  );
+  work = work.replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>");
+  // Avoid lookbehind for broader TS targets: skip asterisks that are part of **.
+  work = work.replace(/(^|[^*])\*([^*\n]+)\*([^*]|$)/g, "$1<em>$2</em>$3");
+  work = work.replace(/(^|[^_])_([^_\n]+)_([^_]|$)/g, "$1<em>$2</em>$3");
+  work = work.replace(/\u0000C(\d+)\u0000/g, (_m, i) => inlines[Number(i)] ?? "");
+  work = work.replace(/\u0000F(\d+)\u0000/g, (_m, i) => fences[Number(i)] ?? "");
+  const blocks = work.split(/\n{2,}/).map((block) => {
+    const trimmed = block.trim();
+    if (!trimmed) return "";
+    if (trimmed.startsWith("<pre>")) return trimmed;
+    return `<p>${trimmed.replace(/\n/g, "<br/>")}</p>`;
+  });
+  return blocks.filter(Boolean).join("");
+}
+
 /** Formatting helpers for building `formatted_body` safely. */
 export const fmt = {
   bold: (text: string): string => `<strong>${escapeHtml(text)}</strong>`,

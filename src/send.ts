@@ -1,4 +1,5 @@
 import { htmlToPlainBody, type MatrixClient } from "./client.js";
+import { markdownToHtml } from "./html.js";
 import {
   KEYBOARD_CONTENT_KEY,
   renderKeyboardFallback,
@@ -6,7 +7,7 @@ import {
   type InlineKeyboard,
   type KeyboardContent,
 } from "./keyboards.js";
-import type { SendOptions } from "./types.js";
+import type { ParseMode, SendOptions } from "./types.js";
 import { escapeHtml } from "./util.js";
 
 export interface MessageSource {
@@ -42,17 +43,26 @@ export function buildMessageContent(
 ): { content: Record<string, unknown>; tokens: string[] } {
   const opts = options ?? {};
   const tokens: string[] = [];
+  const parseMode: ParseMode = opts.parseMode ?? "plain";
+  const keyboardFallback = opts.keyboardFallback !== false;
 
   let plain = source.text ?? (source.html ? htmlToPlainBody(source.html) : "");
-  let formatted = source.html ?? null;
+  let formatted =
+    source.html ??
+    (source.text && parseMode !== "plain" ? formatPlain(source.text, parseMode) : null);
   let keyboardContent: KeyboardContent | null = null;
 
   if (opts.keyboard && !opts.keyboard.isEmpty) {
     keyboardContent = tokenizeKeyboard(opts.keyboard, target, tokens);
-    const fallback = renderKeyboardFallback(keyboardContent);
-    if (fallback.text) plain = plain ? `${plain}\n\n${fallback.text}` : fallback.text;
-    if (fallback.html) {
-      formatted = `${formatted ?? plainToHtml(source.text ?? "")}${fallback.html}`;
+    if (keyboardFallback) {
+      const fallback = renderKeyboardFallback(keyboardContent);
+      if (fallback.text) plain = plain ? `${plain}\n\n${fallback.text}` : fallback.text;
+      if (fallback.html) {
+        const base =
+          formatted ??
+          (source.text ? formatPlain(source.text, parseMode) : plainToHtml(""));
+        formatted = `${base}${fallback.html}`;
+      }
     }
   }
 
@@ -83,8 +93,8 @@ export function buildMessageContent(
 /**
  * Serialise a keyboard, replacing raw callback payloads with opaque tokens.
  *
- * Only the token travels through the text fallback, so a user cannot forge
- * arbitrary callback data by typing the fallback command by hand.
+ * Structured JSON keeps the full (possibly signed) token; plaintext fallback
+ * uses a short alias when the registry provides one.
  */
 function tokenizeKeyboard(
   keyboard: InlineKeyboard,
@@ -104,7 +114,12 @@ function tokenizeKeyboard(
         ...(target.callbackUserId ? { userId: target.callbackUserId } : {}),
       });
       minted.push(token);
-      return { ...button, token };
+      const fallback = registry.fallbackOf?.(token);
+      return {
+        ...button,
+        token,
+        ...(fallback && fallback !== token ? { fallback } : {}),
+      };
     }),
   );
   return content;
@@ -140,6 +155,13 @@ function buildRelation(
   }
   if (replyTo) return { "m.in_reply_to": { event_id: replyTo } };
   return null;
+}
+
+function formatPlain(text: string, parseMode: ParseMode): string {
+  if (!text) return "";
+  if (parseMode === "markdown") return markdownToHtml(text);
+  if (parseMode === "html") return text;
+  return plainToHtml(text);
 }
 
 function plainToHtml(text: string): string {

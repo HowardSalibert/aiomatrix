@@ -7,10 +7,12 @@ import {
   clearSession,
   loadSession,
   loginWithPassword,
+  pruneOtherDevices,
   refreshAccessToken,
   saveSession,
   type MatrixSession,
   type PasswordLoginOptions,
+  type PruneOtherDevicesOptions,
 } from "./login.js";
 import { createDefaultLogger, type Logger } from "./logger.js";
 import { readJsonSafe, resolveStoragePath, writeJsonAtomic } from "./util.js";
@@ -102,6 +104,12 @@ export interface RelocateSessionOptions {
   wipeCrypto?: boolean;
   /** Also clear session.json before login. Default true. */
   clearExistingSession?: boolean;
+  /**
+   * After login, delete other devices on the account so Megolm fanout does not
+   * target ghosts from previous wipes. Pass `true` for defaults, or tune via
+   * {@link PruneOtherDevicesOptions} (without `keepDeviceId` / `auth`).
+   */
+  pruneOtherDevices?: boolean | Omit<PruneOtherDevicesOptions, "keepDeviceId" | "auth">;
   logger?: Logger;
   fetchImpl?: typeof fetch;
   allowInsecure?: boolean;
@@ -143,6 +151,34 @@ export async function relocateSession(options: RelocateSessionOptions): Promise<
   const session = await loginWithPassword(loginOpts);
   saveSession(root, session);
   savePersistedDeviceId(root, session.deviceId);
+
+  if (options.pruneOtherDevices) {
+    const pruneOpts =
+      options.pruneOtherDevices === true ? {} : options.pruneOtherDevices;
+    const http = new MatrixHttp(session.homeserverUrl, {
+      accessToken: session.accessToken,
+      logger,
+      ...(options.fetchImpl ? { fetchImpl: options.fetchImpl } : {}),
+      ...(options.allowInsecure ? { allowInsecure: true } : {}),
+    });
+    try {
+      const result = await pruneOtherDevices(http, {
+        ...pruneOpts,
+        keepDeviceId: session.deviceId,
+        auth: {
+          type: "m.login.password",
+          identifier: { type: "m.id.user", user: options.user },
+          password: options.password,
+        },
+      });
+      logger.info(
+        `pruned ${result.deleted.length} other device(s); kept ${result.kept}`,
+      );
+    } catch (err) {
+      logger.warn("pruneOtherDevices after relocate failed", err);
+    }
+  }
+
   logger.info(
     `relocated session for ${session.userId} (device ${session.deviceId}` +
       `${options.wipeCrypto !== false ? ", crypto wiped" : ""})`,

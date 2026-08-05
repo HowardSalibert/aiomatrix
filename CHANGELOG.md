@@ -17,6 +17,10 @@ semantic versioning.
   `allowUnsignedCallbacks: true` if a custom client must send raw `content.data`.
 - **Crypto store passphrase required** unless `allowUnencryptedCryptoStore: true`. When omitted, a
   random passphrase is generated and persisted as `storagePath/crypto-passphrase.json`.
+- **MiniApp cards no longer set top-level `content.url`** (that field means `mxc://` media). The
+  signed launch URL lives only in `dev.aiomatrix.mini_app.url`. Opt back in with `topLevelUrl` /
+  `studnovsuCompat`. Body is title + description + a short hash-stripped link (not the JWT fragment);
+  `!cb` keyboard dump is off by default for MiniApps (`includeKeyboardFallback`).
 
 ### Added
 
@@ -30,6 +34,15 @@ semantic versioning.
   `refreshMiniAppSessionRoomAuth` / `assertMiniAppJoinedLive` / `assertMiniAppPowerLive`.
 - **`bootstrapCrossSigning`** is invoked from `Bot.start` when the option is set.
 - Live tests: refresh_token exchange and mid-run password recovery.
+- **`SendOptions.keyboardFallback`** / **`messageDefaults`**: aware hosts can omit `!cb` / `<ol>`
+  dumps while keeping `dev.aiomatrix.keyboard`.
+- **`parseMode: "markdown"`** plus `replyMarkdown` / `answerMarkdown` / `markdownToHtml`
+  (`**bold**`, `_italic_`, code, links).
+- **Short `!cb` aliases** for signed callbacks (JWT stays in keyboard JSON only).
+- MiniApp send flags: `includePlainLink`, `includeLaunchKeyboard`, `includeKeyboardFallback`,
+  `topLevelUrl` (bot `miniApp.*` defaults + per-call overrides).
+- **Device GC:** `listDevices`, `deleteDevice(s)`, `pruneOtherDevices`, and
+  `relocateSession({ pruneOtherDevices: true })` to drop ghost bot devices after crypto wipes.
 
 ### Fixed
 

@@ -322,6 +322,9 @@ export class Bot {
       storage: dispatcher.storage,
       callbacks: this.callbacks,
       ...(this.options.fsm ? { fsm: this.options.fsm } : {}),
+      ...(this.options.messageDefaults
+        ? { messageDefaults: this.options.messageDefaults }
+        : {}),
     });
 
     await this.client.start({
@@ -746,7 +749,12 @@ export class Bot {
         ...(options.appId ? { appId: options.appId } : {}),
       }).url;
     }
+    const defaults = this.options.miniApp;
     const content = buildMiniAppContent({
+      includePlainLink: defaults?.includePlainLink,
+      includeLaunchKeyboard: defaults?.includeLaunchKeyboard,
+      includeKeyboardFallback: defaults?.includeKeyboardFallback,
+      topLevelUrl: defaults?.topLevelUrl,
       ...options,
       url: launchUrl,
       botId: options.botId ?? this.selfId,

@@ -15,7 +15,19 @@ export const CALLBACK_FALLBACK_COMMAND = "cb";
 export const KEYBOARD_SCHEMA_VERSION = 1;
 
 export type InlineButton =
-  | { kind: "callback"; text: string; data: string; token?: string; style?: ButtonStyle }
+  | {
+      kind: "callback";
+      text: string;
+      data: string;
+      /** Token in structured keyboard JSON (may be signed / long). */
+      token?: string;
+      /**
+       * Short id for plaintext `!cb` fallback. Prefer this over `token` in
+       * {@link renderKeyboardFallback}; signed tokens stay in JSON only.
+       */
+      fallback?: string;
+      style?: ButtonStyle;
+    }
   | { kind: "url"; text: string; url: string; style?: ButtonStyle }
   | {
       kind: "mini_app";
@@ -251,6 +263,8 @@ export function parseKeyboardContent(content: unknown): KeyboardContent | null {
         const item: InlineButton = { kind: "callback", text, data };
         const token = readString(button, "token");
         if (token) item.token = token;
+        const fallback = readString(button, "fallback");
+        if (fallback) item.fallback = fallback;
         parsed.push(item);
       }
     }
@@ -300,9 +314,8 @@ export function renderKeyboardFallback(keyboard: KeyboardContent): KeyboardFallb
           );
           break;
         default: {
-          const invoke = button.token
-            ? `!${CALLBACK_FALLBACK_COMMAND} ${button.token}`
-            : button.text;
+          const id = button.fallback ?? button.token;
+          const invoke = id ? `!${CALLBACK_FALLBACK_COMMAND} ${id}` : button.text;
           lines.push(`${index}. ${button.text} → ${invoke}`);
           htmlItems.push(
             `<li>${escapeHtml(button.text)}: <code>${escapeHtml(invoke)}</code></li>`,
@@ -351,6 +364,11 @@ export interface CallbackIssueParams {
 /** Mint / resolve opaque or signed callback tokens. */
 export interface CallbackTokenStore {
   issue(params: CallbackIssueParams): string;
+  /**
+   * Short id for plaintext `!cb` fallback. Defaults to `token` when omitted
+   * (process-local opaque registries already issue short tokens).
+   */
+  fallbackOf?(token: string): string;
   bindMessage(tokens: readonly string[], messageEventId: string): void;
   bind(tokens: readonly string[], messageEventId: string): void;
   peek(token: string, now?: number): CallbackTokenRecord | null;
@@ -518,6 +536,9 @@ export class SignedCallbackRegistry implements CallbackTokenStore {
   /** Local message-id bindings and answered flags keyed by full token. */
   private readonly side = new Map<string, { messageEventId: string; answered: boolean }>();
   private readonly byMessage = new Map<string, Set<string>>();
+  /** Short `!cb` aliases → signed token (timeline stays readable). */
+  private readonly aliases = new Map<string, string>();
+  private readonly aliasOf = new Map<string, string>();
 
   constructor(options: SignedCallbackRegistryOptions) {
     if (!options.secret || options.secret.length < 16) {
@@ -531,19 +552,32 @@ export class SignedCallbackRegistry implements CallbackTokenStore {
 
   issue(params: CallbackIssueParams): string {
     const ttl = params.ttlMs ?? this.ttlMs;
+    // `n` doubles as the short `!cb` alias so stock timelines stay readable.
+    const alias = randomId(8);
     const payload: SignedCallbackPayload = {
       d: params.data,
       r: params.roomId,
       e: Date.now() + ttl,
       s: params.singleUse ?? false,
-      n: randomId(8),
+      n: alias,
     };
     if (params.userId) payload.u = params.userId;
     const token = signCallbackToken(payload, this.secret);
+    this.aliases.set(alias, token);
+    this.aliasOf.set(token, alias);
     const messageEventId = params.messageEventId ?? "";
     this.side.set(token, { messageEventId, answered: false });
     if (messageEventId) this.trackMessage(token, messageEventId);
     return token;
+  }
+
+  fallbackOf(token: string): string {
+    return this.aliasOf.get(token) ?? token;
+  }
+
+  /** Resolve a short fallback alias or a full signed token to the signed form. */
+  private canonicalize(token: string): string {
+    return this.aliases.get(token) ?? token;
   }
 
   bindMessage(tokens: readonly string[], messageEventId: string): void {
@@ -560,17 +594,18 @@ export class SignedCallbackRegistry implements CallbackTokenStore {
   }
 
   peek(token: string, now = Date.now()): CallbackTokenRecord | null {
-    if (this.used.has(deadKey(token))) return null;
-    const payload = verifyCallbackToken(token, this.secret);
+    const signed = this.canonicalize(token);
+    if (this.used.has(deadKey(signed))) return null;
+    const payload = verifyCallbackToken(signed, this.secret);
     if (!payload) return null;
     if (payload.e <= now) return null;
-    const local = this.side.get(token);
+    const local = this.side.get(signed);
     const record: CallbackTokenRecord = {
       data: payload.d,
       roomId: payload.r,
       messageEventId: local?.messageEventId ?? "",
       expiresAtMs: payload.e,
-      answered: local?.answered ?? this.used.has(answeredKey(token)),
+      answered: local?.answered ?? this.used.has(answeredKey(signed)),
       singleUse: payload.s,
     };
     if (payload.u) record.userId = payload.u;
@@ -583,15 +618,16 @@ export class SignedCallbackRegistry implements CallbackTokenStore {
         "SignedCallbackRegistry has asyncUsed configured; call resolveAsync()",
       );
     }
-    const record = this.peek(token, now);
+    const signed = this.canonicalize(token);
+    const record = this.peek(signed, now);
     if (!record) return null;
     if (record.userId && userId && record.userId !== userId) return null;
     if (record.singleUse) {
       const ttl = Math.max(1, record.expiresAtMs - now);
       if (this.used.tryAdd) {
-        if (!this.used.tryAdd(deadKey(token), ttl)) return null;
+        if (!this.used.tryAdd(deadKey(signed), ttl)) return null;
       } else {
-        this.used.add(deadKey(token), ttl);
+        this.used.add(deadKey(signed), ttl);
       }
     }
     return record;
@@ -602,38 +638,46 @@ export class SignedCallbackRegistry implements CallbackTokenStore {
     userId?: string,
     now = Date.now(),
   ): Promise<CallbackTokenRecord | null> {
-    const record = this.peek(token, now);
+    const signed = this.canonicalize(token);
+    const record = this.peek(signed, now);
     if (!record) return null;
     if (record.userId && userId && record.userId !== userId) return null;
     if (record.singleUse) {
       const ttl = Math.max(1, record.expiresAtMs - now);
       if (this.asyncUsed) {
-        if (!(await this.asyncUsed.tryAdd(deadKey(token), ttl))) return null;
+        if (!(await this.asyncUsed.tryAdd(deadKey(signed), ttl))) return null;
       } else if (this.used.tryAdd) {
-        if (!this.used.tryAdd(deadKey(token), ttl)) return null;
+        if (!this.used.tryAdd(deadKey(signed), ttl)) return null;
       } else {
-        this.used.add(deadKey(token), ttl);
+        this.used.add(deadKey(signed), ttl);
       }
     }
     return record;
   }
 
   markAnswered(token: string): void {
-    const local = this.side.get(token) ?? { messageEventId: "", answered: false };
+    const signed = this.canonicalize(token);
+    const local = this.side.get(signed) ?? { messageEventId: "", answered: false };
     local.answered = true;
-    this.side.set(token, local);
-    const record = this.peek(token);
+    this.side.set(signed, local);
+    const record = this.peek(signed);
     const ttl = record ? Math.max(1, record.expiresAtMs - Date.now()) : this.ttlMs;
-    this.used.add(answeredKey(token), ttl);
+    this.used.add(answeredKey(signed), ttl);
   }
 
   revoke(token: string): void {
-    this.used.add(deadKey(token), this.ttlMs);
-    const local = this.side.get(token);
+    const signed = this.canonicalize(token);
+    this.used.add(deadKey(signed), this.ttlMs);
+    const local = this.side.get(signed);
     if (local?.messageEventId) {
-      this.byMessage.get(local.messageEventId)?.delete(token);
+      this.byMessage.get(local.messageEventId)?.delete(signed);
     }
-    this.side.delete(token);
+    this.side.delete(signed);
+    const alias = this.aliasOf.get(signed);
+    if (alias) {
+      this.aliases.delete(alias);
+      this.aliasOf.delete(signed);
+    }
   }
 
   revokeForMessage(messageEventId: string): void {
@@ -650,6 +694,8 @@ export class SignedCallbackRegistry implements CallbackTokenStore {
   clear(): void {
     this.side.clear();
     this.byMessage.clear();
+    this.aliases.clear();
+    this.aliasOf.clear();
   }
 
   private trackMessage(token: string, messageEventId: string): void {

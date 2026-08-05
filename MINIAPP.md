@@ -50,7 +50,13 @@ await bot.sendMiniApp(ctx.roomId, {
   buttonText: "Open",
   url: "https://app.example.org/order",
   startParam: "promo-42",
+  // Aware hosts: lean card without plain link / duplicate keyboard dump:
+  // includePlainLink: false, includeLaunchKeyboard: false,
 });
+
+// The signed launch URL stays in `dev.aiomatrix.mini_app` only — the timeline
+// body is title + description + a short https link (hash stripped). Top-level
+// `content.url` is omitted so clients do not treat the card as `mxc://` media.
 
 // Or build the signed URL yourself and put it wherever you like:
 const launch = bot.createMiniAppLaunch({
