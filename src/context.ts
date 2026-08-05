@@ -1,5 +1,6 @@
 import type { Bot } from "./bot.js";
 import type { MatrixClient } from "./client.js";
+import { ConfigurationError, HandlerTimeoutError } from "./errors.js";
 import { FSMContext, type Storage } from "./fsm.js";
 import type { CallbackTokenStore, InlineKeyboard } from "./keyboards.js";
 import type { Logger } from "./logger.js";
@@ -55,6 +56,7 @@ abstract class ContextBase<T extends UpdateType> implements BaseContext<T> {
   readonly isDirect: boolean;
   readonly data: ContextData = {};
   readonly state: FSMContext;
+  abortController: AbortController = new AbortController();
 
   protected constructor(
     protected readonly deps: ContextDeps,
@@ -66,6 +68,10 @@ abstract class ContextBase<T extends UpdateType> implements BaseContext<T> {
     this.eventId = typeof init.event.event_id === "string" ? init.event.event_id : "";
     this.isDirect = init.isDirect;
     this.state = new FSMContext(deps.storage, init.roomId, init.senderId, deps.fsm ?? {});
+  }
+
+  get signal(): AbortSignal {
+    return this.abortController.signal;
   }
 
   get client(): MatrixClient {
@@ -92,8 +98,21 @@ abstract class ContextBase<T extends UpdateType> implements BaseContext<T> {
     return this.deps.client.rooms.powerLevelOf(this.roomId, userId ?? this.senderId);
   }
 
+  /** Refuse sends after handler timeout or bot shutdown. */
+  protected assertWritable(): void {
+    if (this.signal.aborted) {
+      const reason = this.signal.reason;
+      if (reason instanceof HandlerTimeoutError) throw reason;
+      throw new HandlerTimeoutError(0, `${this.updateType} in ${this.roomId || "(no room)"}`);
+    }
+    if (this.deps.bot.isStopping) {
+      throw new ConfigurationError("Bot is stopped; refusing to send");
+    }
+  }
+
   /** Target used by every send helper on this context. */
   protected sendTarget(): SendTarget {
+    this.assertWritable();
     return {
       client: this.deps.client,
       roomId: this.roomId,

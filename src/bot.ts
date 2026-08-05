@@ -229,6 +229,33 @@ export class Bot {
         );
       }
     }
+    if (
+      this.callbacks instanceof SignedCallbackRegistry &&
+      !params.options.callbackAsyncUsedStore &&
+      !params.options.callbackUsedStore
+    ) {
+      this.logger.warn(
+        "signed callback tokens use a process-local used-store; multi-instance bots must inject callbackAsyncUsedStore (see examples/redis-stores)",
+      );
+    }
+    if (
+      this.miniAppQueries instanceof SignedMiniAppQueryRegistry &&
+      !params.options.miniApp?.asyncQueryUsedStore &&
+      !params.options.miniApp?.queryUsedStore
+    ) {
+      this.logger.warn(
+        "signed MiniApp query tokens use a process-local used-store; multi-instance bots must inject miniApp.asyncQueryUsedStore",
+      );
+    }
+    if (
+      params.options.miniApp?.asyncNonceStore == null &&
+      params.options.miniApp?.nonceStore == null &&
+      params.options.miniApp?.secret
+    ) {
+      this.logger.warn(
+        "MiniApp launch nonces default to process-local memory; multi-instance HTTP must inject miniApp.asyncNonceStore",
+      );
+    }
   }
 
   static async create(options: BotCreateOptions): Promise<Bot> {
@@ -256,6 +283,11 @@ export class Bot {
 
   get isRunning(): boolean {
     return this.started;
+  }
+
+  /** True after `stop()` began — contexts refuse further sends. */
+  get isStopping(): boolean {
+    return this.stopping;
   }
 
   /** The bot's own user id. */
@@ -396,6 +428,22 @@ export class Bot {
       throw new ConfigurationError("no device id is available after prepareCrypto");
     }
     await assertOwnDeviceKeysReady(this.client, this.selfId, readyDevice);
+    if (this.options.bootstrapCrossSigning && this.client.crypto) {
+      try {
+        const auth =
+          this.options.password != null
+            ? {
+                type: "m.login.password",
+                identifier: { type: "m.id.user", user: this.selfId },
+                password: this.options.password,
+              }
+            : undefined;
+        await this.client.crypto.bootstrapCrossSigning(false, auth);
+        this.logger.info("cross-signing keys bootstrapped");
+      } catch (err) {
+        this.logger.warn("bootstrapCrossSigning failed", err);
+      }
+    }
     this._cryptoReady = true;
   }
 
@@ -418,9 +466,10 @@ export class Bot {
     if (event.sender === this.selfId) return;
     try {
       const ctx = await this.factory.fromRoomEvent(roomId, event, meta);
-      if (!ctx) return;
+      if (!ctx || this.stopping) return;
       await this.dispatcher.feed(ctx);
     } catch (err) {
+      if (this.stopping) return;
       this.logger.error(`unhandled dispatch error in ${roomId}`, err);
     }
   }
@@ -476,7 +525,15 @@ export class Bot {
           queryId: token as string,
         };
       }
-      // A client may send the payload directly when it minted no token.
+      // Unsigned `content.data` bypasses room-bound HMAC — off by default.
+      if (!this.options.allowUnsignedCallbacks) {
+        if (readString(content, "data") || token) {
+          this.logger.warn(
+            `ignoring unsigned/invalid ${CALLBACK_EVENT_TYPE} in ${roomId} (set allowUnsignedCallbacks to opt in)`,
+          );
+        }
+        return null;
+      }
       const data = readString(content, "data");
       if (!data) return null;
       return {

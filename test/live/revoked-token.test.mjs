@@ -10,6 +10,8 @@ describe("live revoked token", { skip: !env }, () => {
     let fatal = null;
     const { bot } = await createLiveBot(env, "bot", {
       botOptions: {
+        // Disable mid-run password recovery so revoke still surfaces as fatal.
+        autoReloginOnAuthFailure: false,
         onFatal: (err) => {
           fatal = err;
         },

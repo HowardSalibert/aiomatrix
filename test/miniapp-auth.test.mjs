@@ -142,4 +142,42 @@ describe("MiniApp room auth helpers", () => {
     assert.equal(body.source, "live");
     assert.equal(body.power_level, 100);
   });
+
+  it("refreshes membership on /data before gated handlers", async () => {
+    let seenPower = null;
+    const app = new MiniAppServer({
+      secret: SECRET,
+      allowedOrigins: [ORIGIN],
+      singleUseLaunch: false,
+      minPowerLevel: 50,
+      resolveRoomAuth: async () => ({ membership: "join", powerLevel: 80 }),
+      onData: async (session) => {
+        seenPower = session.powerLevel;
+        return { ok: true };
+      },
+    });
+    const token = createSessionToken(
+      {
+        userId: "@alice:example.org",
+        roomId: "!room:example.org",
+        queryId: null,
+        appId: null,
+        membership: "join",
+        powerLevel: 0,
+      },
+      SECRET,
+    );
+    const res = await app.handle({
+      method: "POST",
+      url: "/data",
+      headers: {
+        origin: ORIGIN,
+        authorization: `Bearer ${token}`,
+        "content-type": "application/json",
+      },
+      body: { data: "ping" },
+    });
+    assert.equal(res.status, 200);
+    assert.equal(seenPower, 80);
+  });
 });

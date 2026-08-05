@@ -1,3 +1,4 @@
+import * as crypto from "node:crypto";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { ConfigurationError } from "./errors.js";
@@ -149,44 +150,131 @@ export async function relocateSession(options: RelocateSessionOptions): Promise<
   return session;
 }
 
+function cryptoPassphrasePath(storagePath: string): string {
+  return path.join(storagePath, "crypto-passphrase.json");
+}
+
 /**
- * Build the MatrixHttp `onTokenExpired` hook that refreshes and persists the
- * session. Returns `null` when no refresh token is available.
+ * Resolve the Olm SQLite passphrase: explicit option, persisted file, or a
+ * newly generated secret written under `storagePath`. Returns `null` only when
+ * `allowUnencrypted` is set.
  */
-export function createSessionRefreshHandler(options: {
+export function resolveCryptoStorePassphrase(
+  storagePath: string,
+  provided: string | null | undefined,
+  options: { allowUnencrypted?: boolean; logger?: Logger } = {},
+): string | null {
+  if (provided != null && provided.length > 0) return provided;
+  if (options.allowUnencrypted) return null;
+
+  const root = resolveStoragePath(storagePath);
+  const file = cryptoPassphrasePath(root);
+  const existing = readJsonSafe<{ passphrase?: string }>(file);
+  if (existing?.passphrase && existing.passphrase.length >= 16) {
+    return existing.passphrase;
+  }
+  const passphrase = crypto.randomBytes(32).toString("base64url");
+  fs.mkdirSync(root, { recursive: true });
+  writeJsonAtomic(file, { passphrase });
+  (options.logger ?? createDefaultLogger()).info(
+    `generated a crypto store passphrase in ${file} — back it up with the crypto directory`,
+  );
+  return passphrase;
+}
+
+export interface SessionRefreshHandlerOptions {
   storagePath: string;
-  homeserverUrl: string;
+  /**
+   * Current homeserver URL. Prefer a getter so password re-login can follow
+   * `well_known` / delegated HS changes.
+   */
+  homeserverUrl: string | (() => string);
+  /** Called when password re-login discovers a different homeserver URL. */
+  onHomeserverUrl?: (url: string) => void;
   logger?: Logger;
   fetchImpl?: typeof fetch;
   allowInsecure?: boolean;
-}): (error: unknown) => Promise<string | null> {
+  /** When refresh fails, password-login again (mid-run recovery). */
+  password?: string;
+  userId?: string;
+  autoRelogin?: boolean;
+  deviceDisplayName?: string;
+}
+
+/**
+ * Build the MatrixHttp `onTokenExpired` hook that refreshes and persists the
+ * session. Falls back to password re-login when configured. Returns `null`
+ * when recovery is impossible.
+ */
+export function createSessionRefreshHandler(
+  options: SessionRefreshHandlerOptions,
+): (error: unknown) => Promise<string | null> {
   const root = resolveStoragePath(options.storagePath);
   const logger = options.logger ?? createDefaultLogger();
+  const getHomeserverUrl = (): string =>
+    typeof options.homeserverUrl === "function"
+      ? options.homeserverUrl()
+      : options.homeserverUrl;
+
   return async () => {
     const session = loadSession(root);
-    if (!session?.refreshToken) {
+    if (session?.refreshToken) {
+      const anon = new MatrixHttp(getHomeserverUrl(), {
+        logger,
+        ...(options.fetchImpl ? { fetchImpl: options.fetchImpl } : {}),
+        ...(options.allowInsecure ? { allowInsecure: true } : {}),
+      });
+      try {
+        const next = await refreshAccessToken(anon, session.refreshToken);
+        const updated: MatrixSession = {
+          ...session,
+          accessToken: next.accessToken,
+          refreshToken: next.refreshToken ?? session.refreshToken,
+        };
+        if (next.expiresAtMs !== undefined) updated.expiresAtMs = next.expiresAtMs;
+        else delete updated.expiresAtMs;
+        saveSession(root, updated);
+        logger.info("refreshed Matrix access token");
+        return next.accessToken;
+      } catch (err) {
+        logger.warn("refresh_token exchange failed", err);
+      }
+    } else {
       logger.warn("access token expired and no refresh_token is stored");
+    }
+
+    if (!options.autoRelogin || !options.password || !options.userId) {
       return null;
     }
-    const anon = new MatrixHttp(options.homeserverUrl, {
-      logger,
-      ...(options.fetchImpl ? { fetchImpl: options.fetchImpl } : {}),
-      ...(options.allowInsecure ? { allowInsecure: true } : {}),
-    });
+
+    const deviceId =
+      session?.deviceId ?? loadPersistedDeviceId(root) ?? undefined;
     try {
-      const next = await refreshAccessToken(anon, session.refreshToken);
-      const updated: MatrixSession = {
-        ...session,
-        accessToken: next.accessToken,
-        refreshToken: next.refreshToken ?? session.refreshToken,
+      logger.warn("password re-login after auth failure");
+      const loginOpts: PasswordLoginOptions = {
+        homeserverUrl: getHomeserverUrl(),
+        user: options.userId,
+        password: options.password,
+        logger,
+        ...(deviceId ? { deviceId } : {}),
+        ...(options.deviceDisplayName
+          ? { initialDeviceDisplayName: options.deviceDisplayName }
+          : {}),
+        ...(options.fetchImpl ? { fetchImpl: options.fetchImpl } : {}),
+        ...(options.allowInsecure ? { allowInsecure: true } : {}),
       };
-      if (next.expiresAtMs !== undefined) updated.expiresAtMs = next.expiresAtMs;
-      else delete updated.expiresAtMs;
-      saveSession(root, updated);
-      logger.info("refreshed Matrix access token");
+      const next = await loginWithPassword(loginOpts);
+      saveSession(root, next);
+      savePersistedDeviceId(root, next.deviceId);
+      if (next.homeserverUrl !== getHomeserverUrl()) {
+        options.onHomeserverUrl?.(next.homeserverUrl);
+      }
+      logger.info(
+        `password re-login succeeded for ${next.userId} (device ${next.deviceId})`,
+      );
       return next.accessToken;
     } catch (err) {
-      logger.warn("refresh_token exchange failed", err);
+      logger.warn("password re-login after auth failure failed", err);
       return null;
     }
   };

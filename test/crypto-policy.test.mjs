@@ -5,6 +5,7 @@ import {
   DEFAULT_ENCRYPTION_SHARE_POLICY,
   filterShareRecipients,
   parseToDeviceRecipients,
+  shouldRotateEveryMessage,
 } from "../dist/crypto.js";
 import { RoomKeyWithheldError } from "../dist/errors.js";
 
@@ -16,12 +17,31 @@ describe("resolveEncryptionSharePolicy", () => {
     assert.equal(policy.errorOnVerifiedUserProblem, false);
     // Default true: avoids "bot reply decrypts only after the user's next
     // message" when peers wipe crypto and the machine skips an already-shared
-    // Megolm session. Large rooms may opt out explicitly.
+    // Megolm session. Large rooms use the peer cap instead of a full opt-out.
     assert.equal(policy.rotateEveryMessage, true);
+    assert.equal(policy.rotateEveryMessageMaxPeers, 32);
     assert.equal(policy.rotationPeriodMessages, 100);
     assert.equal(policy.rotationPeriodMs, 7 * 24 * 60 * 60 * 1000);
     assert.equal(policy.reshareOnDeviceChange, true);
     assert.deepEqual(resolveEncryptionSharePolicy(null), DEFAULT_ENCRYPTION_SHARE_POLICY);
+  });
+
+  it("caps per-message rotation by peer count", () => {
+    const policy = resolveEncryptionSharePolicy();
+    assert.equal(shouldRotateEveryMessage(policy, 1), true);
+    assert.equal(shouldRotateEveryMessage(policy, 32), true);
+    assert.equal(shouldRotateEveryMessage(policy, 33), false);
+    assert.equal(
+      shouldRotateEveryMessage(resolveEncryptionSharePolicy({ rotateEveryMessage: false }), 1),
+      false,
+    );
+    assert.equal(
+      shouldRotateEveryMessage(
+        resolveEncryptionSharePolicy({ rotateEveryMessageMaxPeers: 0 }),
+        1000,
+      ),
+      true,
+    );
   });
 
   it("merges partial overrides onto the defaults", () => {

@@ -69,10 +69,14 @@ export type {
 
 export {
   assertMiniAppJoined,
+  assertMiniAppJoinedLive,
   assertMiniAppPower,
+  assertMiniAppPowerLive,
   miniAppHasPower,
   miniAppMembershipIs,
+  refreshMiniAppSessionRoomAuth,
 } from "./auth.js";
+export type { RoomAuthSnapshot } from "./auth.js";
 
 export {
   WIDGET_LAYOUT_STATE_EVENT_TYPE,

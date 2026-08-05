@@ -15,14 +15,13 @@ jobs:
     name: test (node ${{ matrix.node }} / ${{ matrix.os }})
     runs-on: ${{ matrix.os }}
     # The suite finishes in seconds; anything longer means a handler or a sync
-    # loop is wedged. --test-timeout would be neater but it needs Node 20.11,
-    # and the library itself runs on 20.10.
+    # loop is wedged. Native crypto requires Node >= 24 (matrix-sdk-crypto-nodejs).
     timeout-minutes: 10
     strategy:
       fail-fast: false
       matrix:
         os: [ubuntu-latest, windows-latest, macos-latest]
-        node: ["20.10", "22", "24"]
+        node: ["24", "26"]
     steps:
       - uses: actions/checkout@v5
       - uses: actions/setup-node@v5
@@ -42,7 +41,7 @@ jobs:
       - uses: actions/checkout@v5
       - uses: actions/setup-node@v5
         with:
-          node-version: "22"
+          node-version: "24"
           cache: npm
       - run: npm ci
       - run: npm run build
@@ -68,7 +67,7 @@ jobs:
       - uses: actions/checkout@v5
       - uses: actions/setup-node@v5
         with:
-          node-version: "22"
+          node-version: "24"
           cache: npm
       - run: npm ci
       - run: npm run audit:deps
@@ -81,7 +80,7 @@ jobs:
       - uses: actions/checkout@v5
       - uses: actions/setup-node@v5
         with:
-          node-version: "22"
+          node-version: "24"
           cache: npm
       - run: npm ci
       - run: npm run build
@@ -94,7 +93,7 @@ jobs:
       - uses: actions/checkout@v5
       - uses: actions/setup-node@v5
         with:
-          node-version: "22"
+          node-version: "24"
           cache: npm
       - run: npm ci
       - run: npm run build

@@ -275,4 +275,24 @@ describe("MatrixHttp", () => {
     assert.equal(seen[0].status, 500);
     assert.equal(seen[1].retried, true);
   });
+
+  it("updates baseUrl after setBaseUrl", async () => {
+    const urls = [];
+    const fetchImpl = async (url) => {
+      urls.push(String(url));
+      return new Response(JSON.stringify({ ok: true }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      });
+    };
+    const client = new MatrixHttp("https://hs.example.org", {
+      accessToken: "tok",
+      fetchImpl,
+      maxRetries: 0,
+    });
+    client.setBaseUrl("https://delegated.example.org/");
+    assert.equal(client.baseUrl, "https://delegated.example.org");
+    await client.request("GET", "/_matrix/client/v3/account/whoami");
+    assert.match(urls[0], /^https:\/\/delegated\.example\.org\//);
+  });
 });

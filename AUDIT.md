@@ -213,7 +213,7 @@ Full-project sweep for bottlenecks, illogical behaviour, leaks, vulnerabilities,
   works where no prebuilt binary exists. Verified by removing `node_modules/@matrix-org` and importing
   the root entry (CI job `no-native-crypto`).
 - Homeserver discovery via `.well-known`, so `homeserverUrl` accepts a URL, a server name, or a user id.
-- CI matrix: Node 20.10 / 22 / 24 on Linux, Windows, macOS.
+- CI matrix: Node 24 / 26 on Linux, Windows, macOS (0.6.0+; crypto-nodejs requires >=24).
 
 ### Testing
 
@@ -252,7 +252,9 @@ green, surface list (`crypto.ts`, `crypto-guard.ts`, MiniApp HMAC, callback toke
 |---|---|
 | History flood on real HS | Covered by live cold-start test |
 | Megolm decrypt with peers | Covered by live Megolm round-trip |
-| Token expiry mid-run | Covered by live revoked-token test |
+| Token expiry mid-run | Covered by live refresh + password relogin; revoked→fatal with `autoReloginOnAuthFailure: false` |
 | Autojoin ACL / knock rooms | Still server-policy dependent (human) |
-| Key backup against a real backup version | Not in product scope; requests marked sent |
+| Key backup against a real backup version | Upload failures no longer ack'd as sent; full version restore still not in live CI |
 | Independent third-party security audit | Not a code deliverable; reporting channel in SECURITY.md |
+| Unsigned callback forge | Closed in 0.6.0 (`allowUnsignedCallbacks` opt-in) |
+| Large-room Megolm share storm | Mitigated by `rotateEveryMessageMaxPeers` (default 32) |

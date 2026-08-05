@@ -10,21 +10,21 @@ import { isPlainObject } from "./util.js";
  */
 
 /**
- * Bot defaults. `rotateEveryMessage: true` is intentional for correctness:
- * after a human crypto wipe the Rust machine often believes the outbound
- * Megolm session was "already shared" to the same device_id and skips the
- * to-device fanout — peers see ciphertext that only decrypts after a later
- * key exchange (feels like "bot replies on my second message"). Fresh session
- * per encrypt forces a real share to current devices.
+ * Bot defaults. `rotateEveryMessage: true` is intentional for correctness in
+ * small rooms / DMs: after a human crypto wipe the Rust machine often believes
+ * the outbound Megolm session was "already shared" to the same device_id and
+ * skips the to-device fanout — peers see ciphertext that only decrypts after a
+ * later key exchange.
  *
- * Large rooms that need the cheaper path can set `rotateEveryMessage: false`
- * and rely on `reshareOnDeviceChange` + rotation periods — accept the wipe
- * edge case or call `invalidateRoomShare(roomId)` after known peer resets.
+ * {@link DEFAULT_ENCRYPTION_SHARE_POLICY.rotateEveryMessageMaxPeers} caps the
+ * per-message path so large rooms do not KeysQuery+reshare on every send.
+ * Override with `rotateEveryMessage: false` or raise/lower the peer cap.
  */
 export const DEFAULT_ENCRYPTION_SHARE_POLICY: Required<EncryptionSharePolicy> = {
   onlyAllowTrustedDevices: false,
   errorOnVerifiedUserProblem: false,
   rotateEveryMessage: true,
+  rotateEveryMessageMaxPeers: 32,
   rotationPeriodMessages: 100,
   rotationPeriodMs: 7 * 24 * 60 * 60 * 1000,
   reshareOnDeviceChange: true,
@@ -39,10 +39,27 @@ export function resolveEncryptionSharePolicy(
     errorOnVerifiedUserProblem:
       policy?.errorOnVerifiedUserProblem ?? d.errorOnVerifiedUserProblem,
     rotateEveryMessage: policy?.rotateEveryMessage ?? d.rotateEveryMessage,
+    rotateEveryMessageMaxPeers:
+      policy?.rotateEveryMessageMaxPeers ?? d.rotateEveryMessageMaxPeers,
     rotationPeriodMessages: policy?.rotationPeriodMessages ?? d.rotationPeriodMessages,
     rotationPeriodMs: policy?.rotationPeriodMs ?? d.rotationPeriodMs,
     reshareOnDeviceChange: policy?.reshareOnDeviceChange ?? d.reshareOnDeviceChange,
   };
+}
+
+/**
+ * Whether this encrypt should start a fresh Megolm session (per-message rotate).
+ * Large rooms above `rotateEveryMessageMaxPeers` use period rotation instead
+ * unless the max is `0` (always rotate when `rotateEveryMessage` is true).
+ */
+export function shouldRotateEveryMessage(
+  policy: Required<EncryptionSharePolicy>,
+  peerCount: number,
+): boolean {
+  if (!policy.rotateEveryMessage) return false;
+  const max = policy.rotateEveryMessageMaxPeers;
+  if (max <= 0) return true;
+  return peerCount <= max;
 }
 
 /** Drop the bot's own user id from megolm share recipients. */

@@ -85,6 +85,13 @@ export interface BaseContext<T extends UpdateType = UpdateType> {
   /** Middleware scratch space (`ctx.data.foo = …`). */
   readonly data: ContextData;
   readonly isDirect: boolean;
+  /**
+   * AbortSignal cancelled when the handler times out. Check before side effects
+   * after `await`; send helpers refuse when aborted or the bot has stopped.
+   */
+  readonly signal: AbortSignal;
+  /** @internal Set by the dispatcher so timeouts can cancel in-flight work. */
+  abortController?: AbortController;
   /** FSM context bound to this room/user pair. */
   readonly state: FSMContext;
   /** Sender of the triggering event (`""` for events without a sender). */
@@ -290,10 +297,18 @@ export interface EncryptionSharePolicy {
    * Default **true**. Every encrypt starts a new outbound Megolm session and
    * re-shares it to current peer devices — required so peers who wiped crypto
    * still decrypt the bot's *first* reply (not only after a later key exchange).
-   * Set `false` for large rooms and rely on `reshareOnDeviceChange` + rotation
-   * periods (accepts the peer-wipe edge case unless you invalidate shares).
+   * In rooms larger than {@link rotateEveryMessageMaxPeers}, period rotation is
+   * used instead to avoid a KeysQuery/share storm.
+   * Set `false` to always use period rotation (accepts the peer-wipe edge case
+   * unless you invalidate shares).
    */
   rotateEveryMessage?: boolean;
+  /**
+   * When `rotateEveryMessage` is true, only rotate per message while the peer
+   * count is at most this value. Larger rooms fall back to period rotation.
+   * Default 32. Set `0` to always rotate when `rotateEveryMessage` is true.
+   */
+  rotateEveryMessageMaxPeers?: number;
   /** Messages before the outbound session rotates. Default 100. */
   rotationPeriodMessages?: number;
   /** Session lifetime in ms before rotation. Default 7 days. */
@@ -385,8 +400,18 @@ export interface BotCreateOptions {
   storagePath?: string;
   /** Initialize Rust crypto and enforce the E2EE contract. Default true. */
   crypto?: boolean;
-  /** Passphrase encrypting the crypto store at rest. */
+  /**
+   * Passphrase encrypting the crypto store at rest. When omitted, a random
+   * passphrase is generated and persisted under `storagePath` (same pattern as
+   * the MiniApp secret). Pass `allowUnencryptedCryptoStore: true` to opt into
+   * an unencrypted SQLite store (not recommended).
+   */
   cryptoStorePassphrase?: string;
+  /**
+   * Allow an empty crypto-store passphrase (unencrypted Olm SQLite on disk).
+   * Default false.
+   */
+  allowUnencryptedCryptoStore?: boolean;
   /** Enable server-side Megolm key backup. Default false. */
   keyBackup?: boolean;
   /** Existing key-backup recovery key (base64). */
@@ -438,11 +463,18 @@ export interface BotCreateOptions {
    */
   callbackAsyncUsedStore?: AsyncUsedTokenStore;
   /**
-   * When a persisted session's access token is rejected, password-login again
-   * reusing `device.json` / the previous device id. Default: `true` when
-   * `password` is provided, otherwise `false`.
+   * When a persisted session's access token is rejected (startup or mid-run),
+   * password-login again reusing `device.json` / the previous device id.
+   * Mid-run: used after `refresh_token` fails or is absent.
+   * Default: `true` when `password` is provided, otherwise `false`.
    */
   autoReloginOnAuthFailure?: boolean;
+  /**
+   * Accept `dev.aiomatrix.callback` events that carry raw `content.data`
+   * without a valid HMAC token. Default **false** — unsigned payloads are
+   * forgeable by any room member.
+   */
+  allowUnsignedCallbacks?: boolean;
   /**
    * How to handle `DeviceMismatchError` during crypto prepare.
    * Default `"throw"`. `"wipe_crypto_and_relogin"` requires `password`.
