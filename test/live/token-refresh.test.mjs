@@ -9,31 +9,23 @@ import {
   loadSession,
   logout,
   refreshAccessToken,
-  saveSession,
 } from "../../dist/index.js";
-import { createLiveBot, liveEnv, sleep } from "./helpers.mjs";
+import { createLiveBot, liveEnv, sleep, tmpDir } from "./helpers.mjs";
 
 const env = liveEnv();
 const silent = createDefaultLogger("silent");
 
 describe("live token refresh / mid-run relogin", { skip: !env }, () => {
   it("exchanges refresh_token for a new access token", async () => {
-    const { bot, storagePath } = await createLiveBot(env, "bot", {
+    // Own storage: shared MATRIX_BOT_STORAGE may hold a token killed by revoked-token.
+    const storagePath = tmpDir("aio-live-refresh-");
+    const { bot } = await createLiveBot(env, "bot", {
       crypto: false,
-      botOptions: { autoReloginOnAuthFailure: false },
+      storagePath,
     });
     const session = loadSession(storagePath);
     assert.ok(session?.refreshToken, "homeserver should issue a refresh_token");
 
-    const anon = new MatrixHttp(session.homeserverUrl, {
-      allowInsecure: session.homeserverUrl.startsWith("http:"),
-      logger: silent,
-    });
-    const next = await refreshAccessToken(anon, session.refreshToken);
-    assert.ok(next.accessToken);
-    assert.notEqual(next.accessToken, session.accessToken);
-
-    saveSession(storagePath, session);
     const handler = createSessionRefreshHandler({
       storagePath,
       homeserverUrl: session.homeserverUrl,
@@ -42,14 +34,30 @@ describe("live token refresh / mid-run relogin", { skip: !env }, () => {
     });
     const viaHandler = await handler(new Error("401"));
     assert.ok(viaHandler);
+    assert.notEqual(viaHandler, session.accessToken);
+
+    const updated = loadSession(storagePath);
+    assert.equal(updated?.accessToken, viaHandler);
+    assert.ok(updated?.refreshToken);
+
+    // Direct /refresh with the (possibly rotated) token the handler persisted.
+    const anon = new MatrixHttp(updated.homeserverUrl, {
+      allowInsecure: updated.homeserverUrl.startsWith("http:"),
+      logger: silent,
+    });
+    const next = await refreshAccessToken(anon, updated.refreshToken);
+    assert.ok(next.accessToken);
+    assert.notEqual(next.accessToken, viaHandler);
 
     await bot.stop().catch(() => {});
   });
 
   it("password-relogins mid-run when the access token is revoked", async () => {
     let fatal = null;
+    const storagePath = tmpDir("aio-live-relogin-");
     const { bot } = await createLiveBot(env, "bot", {
       crypto: false,
+      storagePath,
       botOptions: {
         autoReloginOnAuthFailure: true,
         onFatal: (err) => {
