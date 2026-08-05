@@ -7,13 +7,14 @@ import type { CryptoEngine } from "./crypto.js";
 import { discoverHomeserver } from "./discovery.js";
 import { DispatchQueue, EventDeduper } from "./dispatch-queue.js";
 import {
+  AuthenticationError,
   ConfigurationError,
   DeviceMismatchError,
   EncryptedRoomWithoutCryptoError,
   EncryptionStateUnknownError,
 } from "./errors.js";
 import { MatrixApiError, MatrixHttp } from "./http.js";
-import { loadSession, loginWithPassword, saveSession } from "./login.js";
+import { clearSession, loadSession, loginWithPassword, saveSession } from "./login.js";
 import { createDefaultLogger, type Logger, type LogLevel } from "./logger.js";
 import {
   buildEncryptedFileBlock,
@@ -28,16 +29,14 @@ import {
   type UploadResult,
 } from "./media.js";
 import { RoomCache, type HistoryVisibilityName, type PowerLevels } from "./room-cache.js";
+import {
+  createSessionRefreshHandler,
+  loadPersistedDeviceId,
+  savePersistedDeviceId,
+} from "./session-recovery.js";
 import { SyncLoop, type JoinedRoomSync, type SyncResponse } from "./sync.js";
 import type { BotCreateOptions, MatrixEvent, MatrixMessageEvent } from "./types.js";
-import {
-  escapeHtml,
-  isPlainObject,
-  readJsonSafe,
-  readString,
-  resolveStoragePath,
-  writeJsonAtomic,
-} from "./util.js";
+import { escapeHtml, isPlainObject, readString, resolveStoragePath } from "./util.js";
 
 export interface CreatedClient {
   client: MatrixClient;
@@ -98,20 +97,6 @@ export interface MatrixClientOptions {
   timelineLimit?: number;
   /** Encrypt `m.reaction` events. Default false to match other Matrix clients. */
   encryptReactions?: boolean;
-}
-
-function deviceJsonPath(storagePath: string): string {
-  return path.join(storagePath, "device.json");
-}
-
-function loadPersistedDeviceId(storagePath: string): string | null {
-  const raw = readJsonSafe<{ device_id?: string }>(deviceJsonPath(storagePath));
-  return typeof raw?.device_id === "string" && raw.device_id ? raw.device_id : null;
-}
-
-function savePersistedDeviceId(storagePath: string, deviceId: string): void {
-  if (loadPersistedDeviceId(storagePath) === deviceId) return;
-  writeJsonAtomic(deviceJsonPath(storagePath), { device_id: deviceId });
 }
 
 const HTML_ENTITIES: Record<string, string> = {
@@ -1341,6 +1326,8 @@ export async function createMatrixClient(options: BotCreateOptions): Promise<Cre
 
   const cryptoEnabled = options.crypto !== false;
   const persistedSession = loadSession(storagePath);
+  const autoRelogin =
+    options.autoReloginOnAuthFailure ?? Boolean(options.password);
 
   const discovery = await discoverHomeserver(options.homeserverUrl, {
     logger,
@@ -1353,10 +1340,41 @@ export async function createMatrixClient(options: BotCreateOptions): Promise<Cre
   let sessionDeviceId: string | null = null;
   let sessionUserId: string | null = null;
 
+  const loginUser =
+    options.userId ??
+    (options.homeserverUrl.startsWith("@") ? options.homeserverUrl : undefined);
+
+  async function passwordLogin(deviceId?: string | null): Promise<void> {
+    if (!options.password) {
+      throw new ConfigurationError("password login requires `password`");
+    }
+    if (!loginUser) {
+      throw new ConfigurationError(
+        "password login requires `userId` (or pass the bot's user id as homeserverUrl)",
+      );
+    }
+    const preferredDevice =
+      deviceId ?? options.deviceId ?? loadPersistedDeviceId(storagePath) ?? undefined;
+    const session = await loginWithPassword({
+      homeserverUrl,
+      user: loginUser,
+      password: options.password,
+      logger,
+      ...(preferredDevice ? { deviceId: preferredDevice } : {}),
+      ...(options.deviceDisplayName
+        ? { initialDeviceDisplayName: options.deviceDisplayName }
+        : {}),
+      ...(options.fetchImpl ? { fetchImpl: options.fetchImpl } : {}),
+      ...(options.allowInsecureHomeserver ? { allowInsecure: true } : {}),
+    });
+    saveSession(storagePath, session);
+    accessToken = session.accessToken;
+    sessionDeviceId = session.deviceId;
+    sessionUserId = session.userId;
+    homeserverUrl = session.homeserverUrl;
+  }
+
   if (!accessToken && options.password) {
-    const loginUser =
-      options.userId ??
-      (options.homeserverUrl.startsWith("@") ? options.homeserverUrl : undefined);
     if (!loginUser) {
       throw new ConfigurationError(
         "password login requires `userId` (or pass the bot's user id as homeserverUrl)",
@@ -1371,23 +1389,7 @@ export async function createMatrixClient(options: BotCreateOptions): Promise<Cre
       homeserverUrl = reusable.homeserverUrl;
       logger.debug("reusing persisted session");
     } else {
-      const session = await loginWithPassword({
-        homeserverUrl,
-        user: loginUser,
-        password: options.password,
-        logger,
-        ...(options.deviceId ? { deviceId: options.deviceId } : {}),
-        ...(options.deviceDisplayName
-          ? { initialDeviceDisplayName: options.deviceDisplayName }
-          : {}),
-        ...(options.fetchImpl ? { fetchImpl: options.fetchImpl } : {}),
-        ...(options.allowInsecureHomeserver ? { allowInsecure: true } : {}),
-      });
-      saveSession(storagePath, session);
-      accessToken = session.accessToken;
-      sessionDeviceId = session.deviceId;
-      sessionUserId = session.userId;
-      homeserverUrl = session.homeserverUrl;
+      await passwordLogin(options.deviceId ?? loadPersistedDeviceId(storagePath));
     }
   }
 
@@ -1400,6 +1402,13 @@ export async function createMatrixClient(options: BotCreateOptions): Promise<Cre
   const httpOptions: ConstructorParameters<typeof MatrixHttp>[1] = {
     accessToken,
     logger,
+    onTokenExpired: createSessionRefreshHandler({
+      storagePath,
+      homeserverUrl,
+      logger,
+      ...(options.fetchImpl ? { fetchImpl: options.fetchImpl } : {}),
+      ...(options.allowInsecureHomeserver ? { allowInsecure: true } : {}),
+    }),
     ...(options.allowInsecureHomeserver ? { allowInsecure: true } : {}),
     ...(options.requestTimeoutMs ? { timeoutMs: options.requestTimeoutMs } : {}),
     ...(options.retry?.maxRetries !== undefined ? { maxRetries: options.retry.maxRetries } : {}),
@@ -1414,10 +1423,31 @@ export async function createMatrixClient(options: BotCreateOptions): Promise<Cre
   };
   const http = new MatrixHttp(homeserverUrl, httpOptions);
 
-  const whoami = await http.request<{ user_id: string; device_id?: string }>(
-    "GET",
-    "/_matrix/client/v3/account/whoami",
-  );
+  let whoami: { user_id: string; device_id?: string };
+  try {
+    whoami = await http.request<{ user_id: string; device_id?: string }>(
+      "GET",
+      "/_matrix/client/v3/account/whoami",
+    );
+  } catch (err) {
+    const authFailed =
+      err instanceof AuthenticationError ||
+      (err instanceof MatrixApiError && (err.status === 401 || err.errcode === "M_UNKNOWN_TOKEN"));
+    if (authFailed && autoRelogin && options.password) {
+      logger.warn("persisted session rejected by homeserver; password re-login");
+      clearSession(storagePath);
+      await passwordLogin(sessionDeviceId ?? loadPersistedDeviceId(storagePath));
+      http.setAccessToken(accessToken);
+      // Refresh handler was bound to the previous homeserver URL; recreate if it moved.
+      whoami = await http.request<{ user_id: string; device_id?: string }>(
+        "GET",
+        "/_matrix/client/v3/account/whoami",
+      );
+    } else {
+      throw err;
+    }
+  }
+
   const userId = whoami.user_id || sessionUserId || "";
   if (!userId) {
     throw new ConfigurationError("Homeserver whoami did not return a user_id");
@@ -1428,7 +1458,10 @@ export async function createMatrixClient(options: BotCreateOptions): Promise<Cre
     options.deviceId ?? whoami.device_id ?? sessionDeviceId ?? persistedDeviceId ?? null;
 
   if (options.deviceId && whoami.device_id && options.deviceId !== whoami.device_id) {
-    throw new DeviceMismatchError(options.deviceId, whoami.device_id);
+    throw new DeviceMismatchError(options.deviceId, whoami.device_id, {
+      storagePath,
+      keepDeviceId: whoami.device_id,
+    });
   }
 
   let crypto: CryptoEngine | null = null;

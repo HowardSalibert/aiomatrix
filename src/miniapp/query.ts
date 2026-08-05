@@ -1,5 +1,9 @@
 import * as crypto from "node:crypto";
-import { MemoryUsedTokenStore, type UsedTokenStore } from "../token-store.js";
+import {
+  MemoryUsedTokenStore,
+  type AsyncUsedTokenStore,
+  type UsedTokenStore,
+} from "../token-store.js";
 import { isPlainObject, randomId, timingSafeEqualStrings } from "../util.js";
 
 export interface MiniAppQueryRecord {
@@ -27,6 +31,7 @@ export interface MiniAppQueryStore {
   issue(params: MiniAppQueryIssueParams): MiniAppQueryRecord;
   peek(queryId: string): MiniAppQueryRecord | null;
   claim(queryId: string, userId?: string): MiniAppQueryRecord | null;
+  claimAsync?(queryId: string, userId?: string): Promise<MiniAppQueryRecord | null>;
   release(queryId: string): void;
   revoke(queryId: string): void;
   readonly size: number;
@@ -129,16 +134,20 @@ export interface SignedMiniAppQueryRegistryOptions {
   ttlMs?: number;
   /** Claimed / revoked ids. Share across instances for global single-answer. */
   used?: UsedTokenStore;
+  /** Async claim store for multi-instance; prefer {@link SignedMiniAppQueryRegistry.claimAsync}. */
+  asyncUsed?: AsyncUsedTokenStore;
 }
 
 /**
  * HMAC-signed `queryId` values. Any process with the secret can peek/claim;
- * inject a shared {@link UsedTokenStore} so `claim` is once across instances.
+ * inject a shared {@link UsedTokenStore} / {@link AsyncUsedTokenStore} so
+ * `claim` is once across instances.
  */
 export class SignedMiniAppQueryRegistry implements MiniAppQueryStore {
   private readonly secret: string;
   private readonly ttlMs: number;
   private readonly used: UsedTokenStore;
+  private readonly asyncUsed: AsyncUsedTokenStore | null;
   private issued = 0;
 
   constructor(options: SignedMiniAppQueryRegistryOptions) {
@@ -148,6 +157,7 @@ export class SignedMiniAppQueryRegistry implements MiniAppQueryStore {
     this.secret = options.secret;
     this.ttlMs = Math.max(1, options.ttlMs ?? 60 * 60 * 1000);
     this.used = options.used ?? new MemoryUsedTokenStore();
+    this.asyncUsed = options.asyncUsed ?? null;
   }
 
   issue(params: MiniAppQueryIssueParams): MiniAppQueryRecord {
@@ -193,12 +203,34 @@ export class SignedMiniAppQueryRegistry implements MiniAppQueryStore {
   }
 
   claim(queryId: string, userId?: string): MiniAppQueryRecord | null {
+    if (this.asyncUsed) {
+      throw new TypeError(
+        "SignedMiniAppQueryRegistry has asyncUsed configured; call claimAsync()",
+      );
+    }
     const record = this.peek(queryId);
     if (!record) return null;
     if (record.answeredAtMs !== null) return null;
     if (userId && record.userId !== userId) return null;
     const ttl = Math.max(1, record.expiresAtMs - Date.now());
     if (this.used.tryAdd) {
+      if (!this.used.tryAdd(claimedKey(queryId), ttl)) return null;
+    } else {
+      if (this.used.has(claimedKey(queryId))) return null;
+      this.used.add(claimedKey(queryId), ttl);
+    }
+    return { ...record, answeredAtMs: Date.now() };
+  }
+
+  async claimAsync(queryId: string, userId?: string): Promise<MiniAppQueryRecord | null> {
+    const record = this.peek(queryId);
+    if (!record) return null;
+    if (record.answeredAtMs !== null) return null;
+    if (userId && record.userId !== userId) return null;
+    const ttl = Math.max(1, record.expiresAtMs - Date.now());
+    if (this.asyncUsed) {
+      if (!(await this.asyncUsed.tryAdd(claimedKey(queryId), ttl))) return null;
+    } else if (this.used.tryAdd) {
       if (!this.used.tryAdd(claimedKey(queryId), ttl)) return null;
     } else {
       if (this.used.has(claimedKey(queryId))) return null;

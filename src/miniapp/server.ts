@@ -20,6 +20,19 @@ export interface MiniAppSession {
   appId: string | null;
   /** Epoch seconds. */
   exp: number;
+  /**
+   * Launch-time membership from signed initData (`null` when unknown / pre-0.5.0).
+   */
+  membership?: string | null;
+  /**
+   * Launch-time power level from signed initData (`null` when unknown / pre-0.5.0).
+   */
+  powerLevel?: number | null;
+}
+
+export interface MiniAppRoomAuth {
+  membership: string | null;
+  powerLevel: number | null;
 }
 
 function sign(payload: string, secret: string): string {
@@ -38,6 +51,8 @@ export function createSessionToken(
     queryId: session.queryId ?? null,
     appId: session.appId ?? null,
     exp: session.exp ?? Math.floor(Date.now() / 1000) + ttlSeconds,
+    membership: session.membership ?? null,
+    powerLevel: session.powerLevel ?? null,
   };
   const encoded = Buffer.from(JSON.stringify(payload), "utf8").toString("base64url");
   return `${encoded}.${sign(encoded, secret)}`;
@@ -70,6 +85,8 @@ export function verifySessionToken(token: string, secret: string): MiniAppSessio
     queryId: typeof parsed.queryId === "string" ? parsed.queryId : null,
     appId: typeof parsed.appId === "string" ? parsed.appId : null,
     exp: parsed.exp,
+    membership: typeof parsed.membership === "string" ? parsed.membership : null,
+    powerLevel: typeof parsed.powerLevel === "number" ? parsed.powerLevel : null,
   };
 }
 
@@ -114,6 +131,23 @@ export interface MiniAppServerOptions {
   asyncNonceStore?: AsyncNonceStore;
   /** Base path the routes are mounted under. Default `/`. */
   basePath?: string;
+  /**
+   * Copy membership / power_level from validated initData into the session.
+   * Default true.
+   */
+  includeRoomAuthInSession?: boolean;
+  /**
+   * Live room auth lookup for `/room-auth` and optional `/auth` gating.
+   * Use when MiniApp HTTP runs in a separate process from the syncer.
+   */
+  resolveRoomAuth?: (
+    userId: string,
+    roomId: string,
+  ) => Promise<MiniAppRoomAuth | null> | MiniAppRoomAuth | null;
+  /** Reject `/auth` unless membership is one of these (requires snapshot or resolveRoomAuth). */
+  requireMembership?: Array<"join" | "invite" | "leave" | "ban" | "knock">;
+  /** Reject `/auth` unless power level >= this (requires snapshot or resolveRoomAuth). */
+  minPowerLevel?: number;
   /**
    * Receive `sendData` payloads. Return value is serialised into the response
    * body under `result`.
@@ -169,6 +203,8 @@ export class MiniAppServer {
         : {}),
       ...(this.nonceStore ? { nonceStore: this.nonceStore } : {}),
     });
+    // Snapshot-only gates here. Live resolveRoomAuth runs in authenticateAsync / /room-auth.
+    this.enforceAuthGatesSync(validated);
     return this.mintSession(validated);
   }
 
@@ -179,40 +215,109 @@ export class MiniAppServer {
   async authenticateAsync(initData: string): Promise<MiniAppAuthResult> {
     const asyncStore =
       this.options.singleUseLaunch === false ? null : (this.options.asyncNonceStore ?? null);
-    if (!asyncStore) return this.authenticate(initData);
 
     const validated = validateInitData(initData, this.options.secret, {
       ...(this.options.initDataTtlSeconds !== undefined
         ? { ttlSeconds: this.options.initDataTtlSeconds }
         : {}),
-      // Nonce checked atomically below.
+      ...(!asyncStore && this.nonceStore ? { nonceStore: this.nonceStore } : {}),
     });
-    if (!validated.nonce) {
-      throw new MiniAppAuthError(
-        "initData has no nonce but replay protection is enabled",
-        "malformed",
-      );
+    if (asyncStore) {
+      if (!validated.nonce) {
+        throw new MiniAppAuthError(
+          "initData has no nonce but replay protection is enabled",
+          "malformed",
+        );
+      }
+      const claimed = await asyncStore.tryAdd(validated.nonce);
+      if (!claimed) {
+        throw new MiniAppAuthError("initData nonce was already used", "replayed");
+      }
     }
-    const claimed = await asyncStore.tryAdd(validated.nonce);
-    if (!claimed) {
-      throw new MiniAppAuthError("initData nonce was already used", "replayed");
-    }
+    await this.enforceAuthGates(validated);
     return this.mintSession(validated);
   }
 
   private mintSession(validated: ValidatedInitData): MiniAppAuthResult {
     const ttl = this.options.sessionTtlSeconds ?? 3600;
+    const includeAuth = this.options.includeRoomAuthInSession !== false;
     const token = createSessionToken(
       {
         userId: validated.user.id,
         roomId: validated.room?.id ?? null,
         queryId: validated.queryId,
         appId: null,
+        membership: includeAuth ? (validated.room?.membership ?? null) : null,
+        powerLevel: includeAuth
+          ? (typeof validated.room?.power_level === "number"
+              ? validated.room.power_level
+              : null)
+          : null,
       },
       this.options.secret,
       ttl,
     );
     return { validated, token, expiresAtSeconds: Math.floor(Date.now() / 1000) + ttl };
+  }
+
+  private enforceAuthGatesSync(validated: ValidatedInitData): void {
+    const needMembership = this.options.requireMembership;
+    const needPower = this.options.minPowerLevel;
+    if (!needMembership && needPower === undefined) return;
+    const membership = validated.room?.membership ?? null;
+    const powerLevel =
+      typeof validated.room?.power_level === "number" ? validated.room.power_level : null;
+    if (needMembership && (!membership || !needMembership.includes(membership))) {
+      throw new MiniAppAuthError(
+        `MiniApp auth requires membership in [${needMembership.join(", ")}] (got ${membership ?? "unknown"})`,
+        "forbidden",
+      );
+    }
+    if (needPower !== undefined && (powerLevel == null || powerLevel < needPower)) {
+      throw new MiniAppAuthError(
+        `MiniApp auth requires power level >= ${needPower} (got ${powerLevel ?? "unknown"})`,
+        "forbidden",
+      );
+    }
+  }
+
+  private async enforceAuthGates(
+    validated: ValidatedInitData,
+  ): Promise<void> {
+    const needMembership = this.options.requireMembership;
+    const needPower = this.options.minPowerLevel;
+    if (!needMembership && needPower === undefined) return;
+
+    let membership: string | null = validated.room?.membership ?? null;
+    let powerLevel: number | null =
+      typeof validated.room?.power_level === "number" ? validated.room.power_level : null;
+    const roomId = validated.room?.id;
+    if (this.options.resolveRoomAuth && roomId) {
+      const live = await this.options.resolveRoomAuth(validated.user.id, roomId);
+      if (live) {
+        membership = live.membership;
+        powerLevel = live.powerLevel;
+      }
+    }
+
+    if (
+      needMembership &&
+      (!membership ||
+        !(needMembership as string[]).includes(membership))
+    ) {
+      throw new MiniAppAuthError(
+        `MiniApp auth requires membership in [${needMembership.join(", ")}] (got ${membership ?? "unknown"})`,
+        "forbidden",
+      );
+    }
+    if (needPower !== undefined) {
+      if (powerLevel == null || powerLevel < needPower) {
+        throw new MiniAppAuthError(
+          `MiniApp auth requires power level >= ${needPower} (got ${powerLevel ?? "unknown"})`,
+          "forbidden",
+        );
+      }
+    }
   }
 
   /** Verify an `Authorization: Bearer …` header value or raw token. */
@@ -253,9 +358,10 @@ export class MiniAppServer {
       const body = parseBody(request.body);
       const initData = typeof body.initData === "string" ? body.initData : "";
       try {
-        const result = this.options.asyncNonceStore
-          ? await this.authenticateAsync(initData)
-          : this.authenticate(initData);
+        const result =
+          this.options.asyncNonceStore || this.options.resolveRoomAuth
+            ? await this.authenticateAsync(initData)
+            : this.authenticate(initData);
         return this.json(
           200,
           {
@@ -295,6 +401,44 @@ export class MiniAppServer {
       try {
         const session = this.verify(headerValue(request.headers, "authorization"));
         return this.json(200, { ok: true, session }, cors);
+      } catch (err) {
+        return this.authError(err, cors);
+      }
+    }
+
+    if (route === "/room-auth" && method === "GET") {
+      try {
+        const session = this.verify(headerValue(request.headers, "authorization"));
+        if (!this.options.resolveRoomAuth) {
+          return this.json(
+            200,
+            {
+              ok: true,
+              source: "session",
+              membership: session.membership ?? null,
+              power_level: session.powerLevel ?? null,
+              room_id: session.roomId,
+              user_id: session.userId,
+            },
+            cors,
+          );
+        }
+        if (!session.roomId) {
+          return this.json(400, { error: "no_room" }, cors);
+        }
+        const live = await this.options.resolveRoomAuth(session.userId, session.roomId);
+        return this.json(
+          200,
+          {
+            ok: true,
+            source: "live",
+            membership: live?.membership ?? null,
+            power_level: live?.powerLevel ?? null,
+            room_id: session.roomId,
+            user_id: session.userId,
+          },
+          cors,
+        );
       } catch (err) {
         return this.authError(err, cors);
       }
@@ -366,8 +510,8 @@ export class MiniAppServer {
 
   private authError(err: unknown, cors: Record<string, string>): MiniAppResponse {
     if (err instanceof MiniAppAuthError) {
-      // 401 for anything the caller can fix by re-launching the mini app.
-      return this.json(401, { error: err.reason, message: err.message }, cors);
+      const status = err.reason === "forbidden" || err.reason === "untrusted_origin" ? 403 : 401;
+      return this.json(status, { error: err.reason, message: err.message }, cors);
     }
     throw err;
   }

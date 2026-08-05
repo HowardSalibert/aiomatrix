@@ -28,6 +28,13 @@ export interface MiniAppRoom {
   type: "direct" | "group";
   title?: string;
   photo_url?: string;
+  /**
+   * Launch-time membership snapshot from the bot's RoomCache.
+   * May go stale — use `resolveRoomAuth` for live checks.
+   */
+  membership?: "join" | "invite" | "leave" | "ban" | "knock";
+  /** Launch-time power level snapshot from the bot's RoomCache. */
+  power_level?: number;
 }
 
 export interface MiniAppInitDataPayload {

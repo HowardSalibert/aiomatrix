@@ -5,6 +5,43 @@ semantic versioning.
 
 ## Unreleased
 
+## 0.5.0
+
+### Added
+
+- **Session recovery helpers:** `diagnoseSession`, `wipeCryptoStore`, `relocateSession`,
+  `createSessionRefreshHandler`, plus `loadPersistedDeviceId` / `savePersistedDeviceId`.
+- **`autoReloginOnAuthFailure`** on `BotCreateOptions` (default `true` when `password` is set):
+  rejected persisted sessions password-login again with the same device id.
+- **MiniApp room auth:** `MiniAppRoom.membership` / `power_level` snapshots in signed initData;
+  `MiniAppSession.membership` / `powerLevel`; helpers `assertMiniAppJoined`, `assertMiniAppPower`,
+  `miniAppHasPower`, `miniAppMembershipIs`; `MiniAppServer` options `resolveRoomAuth`,
+  `requireMembership`, `minPowerLevel`, `includeRoomAuthInSession`; `GET /room-auth`.
+- **`F.miniApp.hasPower` / `F.miniApp.joined`** filters.
+- **`RoomCache.membershipOf`**.
+- **`AsyncUsedTokenStore`** / `MemoryAsyncUsedTokenStore`, `callbackAsyncUsedStore`,
+  `miniApp.asyncQueryUsedStore`, `resolveAsync` / `claimAsync` on signed registries.
+- **`RedisAsyncUsedTokenStore`** in `examples/redis-stores` (awaited `SET NX`).
+- **`DeviceMismatchError.recovery`** structured wipe/relogin guidance.
+- **`MiniAppAuthError` reason `"forbidden"`** (HTTP 403 from MiniAppServer).
+
+### Fixed
+
+- **Access-token refresh was never wired.** `createMatrixClient` now attaches
+  `MatrixHttp.onTokenExpired` to exchange `refresh_token` and persist `session.json`, so
+  password-login bots survive token expiry without a fatal restart when the HS issues refresh
+  tokens.
+- Startup whoami `401` / `M_UNKNOWN_TOKEN` with a password falls back to re-login instead of
+  dying immediately.
+- Redis used-token example no longer claims success before Redis confirms `SET NX`.
+
+### Notes
+
+- Snapshot MiniApp power levels can go stale; use `resolveRoomAuth` (default when creating the
+  server from a live `Bot`) for moderator-gated actions.
+- Multi-instance bots must inject async used-token / nonce stores; memory defaults remain
+  process-local.
+
 ## 0.4.0
 
 ### Added

@@ -2,7 +2,9 @@
  * Shared single-use / blacklist store for signed callback tokens and MiniApp queries.
  *
  * Memory default is process-local. For multiple HTTP instances, inject a Redis
- * (or similar) adapter — see `examples/redis-stores`.
+ * (or similar) adapter — see `examples/redis-stores`. Prefer
+ * {@link AsyncUsedTokenStore} when claim uniqueness must be atomic across
+ * processes (`SET NX`).
  */
 export interface UsedTokenStore {
   has(key: string): boolean;
@@ -14,6 +16,16 @@ export interface UsedTokenStore {
    */
   tryAdd?(key: string, ttlMs?: number): boolean;
   delete?(key: string): void;
+}
+
+/**
+ * Async single-use store for multi-instance bots / MiniApp HTTP.
+ * Implementations should use an atomic primitive (Redis `SET key NX EX`).
+ */
+export interface AsyncUsedTokenStore {
+  tryAdd(key: string, ttlMs?: number): Promise<boolean>;
+  has?(key: string): Promise<boolean>;
+  delete?(key: string): Promise<void>;
 }
 
 /** Bounded in-memory {@link UsedTokenStore}. */
@@ -68,5 +80,26 @@ export class MemoryUsedTokenStore implements UsedTokenStore {
     for (const [key, expiresAt] of this.seen) {
       if (expiresAt <= now) this.seen.delete(key);
     }
+  }
+}
+
+/** Process-local {@link AsyncUsedTokenStore} backed by {@link MemoryUsedTokenStore}. */
+export class MemoryAsyncUsedTokenStore implements AsyncUsedTokenStore {
+  private readonly inner: MemoryUsedTokenStore;
+
+  constructor(capacity = 16_384, defaultTtlMs = 24 * 60 * 60 * 1000) {
+    this.inner = new MemoryUsedTokenStore(capacity, defaultTtlMs);
+  }
+
+  async tryAdd(key: string, ttlMs?: number): Promise<boolean> {
+    return this.inner.tryAdd(key, ttlMs);
+  }
+
+  async has(key: string): Promise<boolean> {
+    return this.inner.has(key);
+  }
+
+  async delete(key: string): Promise<void> {
+    this.inner.delete(key);
   }
 }

@@ -33,15 +33,49 @@ export class CryptoNotReadyError extends aiomatrixError {
   }
 }
 
+export type DeviceMismatchSuggested =
+  | "password_relogin_same_device"
+  | "wipe_crypto_and_new_device";
+
+export interface DeviceMismatchRecovery {
+  /** Paths relative to `storagePath` that usually need clearing. */
+  wipePaths: string[];
+  /** Device id that should be reused when possible. */
+  keepDeviceId: string | null;
+  suggested: DeviceMismatchSuggested;
+  /** Human-readable recovery steps for ops / logs. */
+  steps: string[];
+}
+
 /** Configured deviceId does not match the device id from whoami/crypto store. */
 export class DeviceMismatchError extends aiomatrixError {
+  readonly recovery: DeviceMismatchRecovery;
+
   constructor(
     readonly expected: string,
     readonly actual: string | null | undefined,
+    options?: { storagePath?: string; keepDeviceId?: string | null },
   ) {
+    const keepDeviceId = options?.keepDeviceId ?? actual ?? expected;
+    const recovery: DeviceMismatchRecovery = {
+      wipePaths: ["crypto"],
+      keepDeviceId,
+      suggested: "wipe_crypto_and_new_device",
+      steps: [
+        "Stop every process that syncs this storagePath (one writer per device).",
+        "Call wipeCryptoStore(storagePath) or delete storagePath/crypto.",
+        "Password-login again with relocateSession({ wipeCrypto: true }) or a fresh Bot.create.",
+        "Prefer reusing device.json / the previous device_id when the homeserver still accepts it.",
+      ],
+    };
     super(
-      `Device ID mismatch: env/config deviceId=${expected}, client deviceId=${actual ?? "(none)"}. Refusing to start.`,
+      `Device ID mismatch: env/config deviceId=${expected}, client deviceId=${actual ?? "(none)"}. ` +
+        `Refusing to start. Suggested: ${recovery.suggested}. ` +
+        `See error.recovery for wipe paths and steps` +
+        (options?.storagePath ? ` (storagePath=${options.storagePath})` : "") +
+        ".",
     );
+    this.recovery = recovery;
   }
 }
 
@@ -163,7 +197,8 @@ export class MiniAppAuthError extends aiomatrixError {
       | "expired"
       | "malformed"
       | "replayed"
-      | "untrusted_origin",
+      | "untrusted_origin"
+      | "forbidden",
   ) {
     super(message);
   }

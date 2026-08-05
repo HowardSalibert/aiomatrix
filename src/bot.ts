@@ -204,6 +204,9 @@ export class Bot {
         ...(params.options.callbackUsedStore
           ? { used: params.options.callbackUsedStore }
           : {}),
+        ...(params.options.callbackAsyncUsedStore
+          ? { asyncUsed: params.options.callbackAsyncUsedStore }
+          : {}),
       });
     this.miniAppQueries =
       params.options.miniApp?.queries ??
@@ -211,6 +214,9 @@ export class Bot {
         secret: this.miniAppSecret,
         ...(params.options.miniApp?.queryUsedStore
           ? { used: params.options.miniApp.queryUsedStore }
+          : {}),
+        ...(params.options.miniApp?.asyncQueryUsedStore
+          ? { asyncUsed: params.options.miniApp.asyncQueryUsedStore }
           : {}),
       });
     this.miniAppAllowedOrigins = [...(params.options.miniApp?.allowedOrigins ?? [])];
@@ -378,7 +384,10 @@ export class Bot {
     const cryptoDevice = this.client.crypto?.clientDeviceId ?? null;
     if (this.configuredDeviceId) {
       if (!cryptoDevice || cryptoDevice !== this.configuredDeviceId) {
-        throw new DeviceMismatchError(this.configuredDeviceId, cryptoDevice);
+        throw new DeviceMismatchError(this.configuredDeviceId, cryptoDevice, {
+          storagePath: this.storagePath,
+          keepDeviceId: cryptoDevice,
+        });
       }
       if (deviceId) assertDeviceIdMatch(this.configuredDeviceId, deviceId);
     }
@@ -449,16 +458,16 @@ export class Bot {
    * Resolve an inline-keyboard press from either the dedicated callback event or
    * the `!cb <token>` text fallback. Used by the context factory.
    */
-  readCallbackEvent(
+  async readCallbackEvent(
     roomId: string,
     event: MatrixEvent,
-  ): { callbackData: string; messageEventId: string; queryId: string } | null {
+  ): Promise<{ callbackData: string; messageEventId: string; queryId: string } | null> {
     const type = readString(event, "type");
     const content = isPlainObject(event.content) ? event.content : {};
 
     if (type === CALLBACK_EVENT_TYPE) {
       const token = readString(content, "token");
-      const record = token ? this.resolveCallbackToken(token, roomId, event.sender) : null;
+      const record = token ? await this.resolveCallbackToken(token, roomId, event.sender) : null;
       if (record) {
         if (record.answered) return null;
         return {
@@ -482,7 +491,7 @@ export class Bot {
     if (!body) return null;
     const match = new RegExp(`^[!/]${CALLBACK_FALLBACK_COMMAND}\\s+(\\S+)$`).exec(body);
     if (!match?.[1]) return null;
-    const record = this.resolveCallbackToken(match[1], roomId, event.sender);
+    const record = await this.resolveCallbackToken(match[1], roomId, event.sender);
     if (!record || record.answered) return null;
     return {
       callbackData: record.data,
@@ -495,12 +504,14 @@ export class Bot {
    * Resolve a callback token, refusing tokens minted for a different room.
    * Without the room check a token leaked from one room would work in another.
    */
-  private resolveCallbackToken(
+  private async resolveCallbackToken(
     token: string,
     roomId: string,
     senderId: string | undefined,
-  ): ReturnType<CallbackTokenStore["resolve"]> {
-    const record = this.callbacks.resolve(token, senderId);
+  ): Promise<ReturnType<CallbackTokenStore["resolve"]>> {
+    const record = this.callbacks.resolveAsync
+      ? await this.callbacks.resolveAsync(token, senderId)
+      : this.callbacks.resolve(token, senderId);
     if (!record) return null;
     if (record.roomId !== roomId) {
       this.logger.warn(`callback token used in ${roomId} but was issued for ${record.roomId}`);
@@ -618,6 +629,15 @@ export class Bot {
           ...(this.client.rooms.get(options.roomId)?.name
             ? { title: this.client.rooms.get(options.roomId)!.name as string }
             : {}),
+          ...(this.client.rooms.membershipOf(options.roomId, options.userId)
+            ? {
+                membership: this.client.rooms.membershipOf(
+                  options.roomId,
+                  options.userId,
+                ) as MiniAppRoom["membership"],
+              }
+            : {}),
+          power_level: this.client.rooms.powerLevelOf(options.roomId, options.userId),
         }
       : undefined;
 
@@ -686,7 +706,9 @@ export class Bot {
     text: string,
     options?: SendOptions & { html?: string },
   ): Promise<string | null> {
-    const record = this.miniAppQueries.claim(queryId);
+    const record = this.miniAppQueries.claimAsync
+      ? await this.miniAppQueries.claimAsync(queryId)
+      : this.miniAppQueries.claim(queryId);
     if (!record) {
       this.logger.debug(`mini app query ${queryId} is unknown, expired, or already answered`);
       return null;
@@ -717,6 +739,13 @@ export class Bot {
   createMiniAppServer(
     options: Partial<Omit<MiniAppServerOptions, "secret">> = {},
   ): MiniAppServer {
+    const defaultResolveRoomAuth = (
+      userId: string,
+      roomId: string,
+    ): { membership: string | null; powerLevel: number | null } => ({
+      membership: this.client.rooms.membershipOf(roomId, userId) ?? null,
+      powerLevel: this.client.rooms.powerLevelOf(roomId, userId),
+    });
     return new MiniAppServer({
       secret: this.miniAppSecret,
       allowedOrigins: options.allowedOrigins ?? this.miniAppAllowedOrigins,
@@ -730,6 +759,7 @@ export class Bot {
         ? { asyncNonceStore: this.options.miniApp.asyncNonceStore }
         : {}),
       ...options,
+      resolveRoomAuth: options.resolveRoomAuth ?? defaultResolveRoomAuth,
       onData:
         options.onData ??
         (async (session, data) => {

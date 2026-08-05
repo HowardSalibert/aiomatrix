@@ -62,9 +62,17 @@ export type {
   MiniAppAuthResult,
   MiniAppRequest,
   MiniAppResponse,
+  MiniAppRoomAuth,
   MiniAppServerOptions,
   MiniAppSession,
 } from "./server.js";
+
+export {
+  assertMiniAppJoined,
+  assertMiniAppPower,
+  miniAppHasPower,
+  miniAppMembershipIs,
+} from "./auth.js";
 
 export {
   WIDGET_LAYOUT_STATE_EVENT_TYPE,

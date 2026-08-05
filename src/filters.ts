@@ -345,6 +345,14 @@ export const F = {
         return action !== undefined && set.has(action);
       };
     },
+    /** Sender power level is at least `level` (uses RoomCache via context). */
+    hasPower(level: number): Filter<MiniAppDataContext> {
+      return (ctx) => ctx.powerLevelOf() >= level;
+    },
+    /** Sender is currently joined in the room (RoomCache). */
+    joined(): Filter<MiniAppDataContext> {
+      return (ctx) => ctx.client.rooms.membershipOf(ctx.roomId, ctx.senderId) === "join";
+    },
   },
 
   membership: {

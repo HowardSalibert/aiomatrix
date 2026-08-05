@@ -501,7 +501,7 @@ export class ContextFactory {
 
     // Button presses arrive either as a dedicated event or as the text fallback
     // command, so both are resolved before anything else looks at the event.
-    const callback = this.deps.bot.readCallbackEvent(roomId, event);
+    const callback = await this.deps.bot.readCallbackEvent(roomId, event);
     if (callback) {
       return new CallbackContextImpl(this.deps, { ...init, ...callback });
     }
