@@ -1,9 +1,13 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
 import {
+  InlineKeyboard,
+  KEYBOARD_CONTENT_KEY,
   MemoryUsedTokenStore,
   SignedCallbackRegistry,
   SignedMiniAppQueryRegistry,
+  buildMessageContent,
+  renderKeyboardFallback,
 } from "../dist/index.js";
 
 const SECRET = "signed-token-secret-32chars!!";
@@ -60,6 +64,35 @@ describe("SignedCallbackRegistry", () => {
     const token = reg.issue({ ...base, messageEventId: "$m1" });
     reg.revokeForMessage("$m1");
     assert.equal(reg.peek(token), null);
+  });
+
+  it("puts a short opaque id in the !cb fallback, not the signed JWT", () => {
+    const reg = new SignedCallbackRegistry({ secret: SECRET });
+    const token = reg.issue(base);
+    const alias = reg.fallbackOf(token);
+    assert.ok(alias);
+    assert.ok(alias.length < 20);
+    assert.notEqual(alias, token);
+    assert.ok(token.includes("."));
+    assert.equal(reg.peek(alias).data, "vote:yes");
+    assert.equal(reg.resolve(alias).data, "vote:yes");
+
+    const { content } = buildMessageContent(
+      { text: "Pick" },
+      { keyboard: new InlineKeyboard().text("Yes", "vote:yes") },
+      {
+        client: { async sendEvent() { return "$sent"; } },
+        roomId: "!r:example.org",
+        callbacks: reg,
+      },
+    );
+    const button = content[KEYBOARD_CONTENT_KEY].inline[0][0];
+    assert.ok(button.token.includes("."));
+    assert.ok(button.fallback);
+    assert.ok(!button.fallback.includes("."));
+    const fallback = renderKeyboardFallback(content[KEYBOARD_CONTENT_KEY]);
+    assert.match(fallback.text, new RegExp(`!cb ${button.fallback}`));
+    assert.ok(!fallback.text.includes(button.token));
   });
 });
 

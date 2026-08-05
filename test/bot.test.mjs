@@ -565,6 +565,9 @@ describe("sendMiniApp", () => {
     assert.equal(card.title, "Schedule");
     assert.match(card.url, /#matrixWebAppData=/);
     assert.equal(card.bot_id, "@bot:example.org");
+    assert.equal(sent.body.url, undefined, "top-level url must not collide with mxc media");
+    assert.ok(!String(sent.body.body).includes("matrixWebAppData"));
+    assert.ok(!String(sent.body.body).includes("!cb"));
   });
 
   it("posts a plain card when no user is given", async () => {

@@ -57,6 +57,8 @@ export type UpdateType =
 /** Free-form per-update bag for middleware → handler data passing (aiogram's `data`). */
 export type ContextData = Record<string, unknown>;
 
+export type ParseMode = "plain" | "markdown" | "html";
+
 export interface SendOptions {
   /** Send as `m.notice` instead of `m.text` (bots should prefer notices in groups). */
   notice?: boolean;
@@ -66,12 +68,31 @@ export interface SendOptions {
   thread?: string | boolean;
   /** Attach an inline keyboard. */
   keyboard?: InlineKeyboard;
+  /**
+   * Append plain-text / HTML keyboard fallback (`!cb …`, `<ol>`) for stock clients.
+   * Default true. Aware clients that render `dev.aiomatrix.keyboard` should set
+   * false (or bot `messageDefaults.keyboardFallback`) to keep the timeline clean.
+   */
+  keyboardFallback?: boolean;
+  /**
+   * How to interpret `text` when building `formatted_body`.
+   * - `plain` (default): escape only
+   * - `markdown`: lightweight `**bold**`, `_italic_`, `` `code` ``, `[label](url)`
+   * - `html`: treat `text` as already-safe HTML (prefer `answerHtml` / `html` source)
+   */
+  parseMode?: ParseMode;
   /** Mark specific users / the room as intentionally mentioned (`m.mentions`). */
   mentions?: { userIds?: string[]; room?: boolean };
   /** Extra content fields merged into the event content. */
   extra?: Record<string, unknown>;
   /** Do not fall back to plain text when HTML is provided. */
   htmlOnly?: boolean;
+}
+
+/** Bot-wide defaults for {@link SendOptions}. */
+export interface MessageDefaults {
+  keyboardFallback?: boolean;
+  parseMode?: ParseMode;
 }
 
 /** Common surface of every context object. */
@@ -108,9 +129,13 @@ export interface BaseContext<T extends UpdateType = UpdateType> {
   answer(text: string, options?: SendOptions): Promise<string>;
   /** Send an HTML message (plain-text fallback derived automatically). */
   answerHtml(html: string, options?: SendOptions): Promise<string>;
+  /** Send Markdown (`**bold**`, `_italic_`, …) as `formatted_body`. */
+  answerMarkdown(text: string, options?: SendOptions): Promise<string>;
   /** Send a message as a rich reply to the triggering event. */
   reply(text: string, options?: SendOptions): Promise<string>;
   replyHtml(html: string, options?: SendOptions): Promise<string>;
+  /** Reply with Markdown (`**bold**`, `_italic_`, …). */
+  replyMarkdown(text: string, options?: SendOptions): Promise<string>;
   /** React to the triggering event. */
   react(key: string): Promise<string>;
   /** Show/hide the typing indicator. */
@@ -368,6 +393,27 @@ export interface MiniAppOptions {
   asyncNonceStore?: AsyncNonceStore;
   /** Inject a custom query registry (defaults to signed HMAC registry). */
   queries?: MiniAppQueryStore;
+  /**
+   * Put a short plain link in the MiniApp card body (hash stripped).
+   * Default true. Set false when only aware clients should launch the app.
+   */
+  includePlainLink?: boolean;
+  /**
+   * Attach a `mini_app` keyboard row under the card. Default true.
+   */
+  includeLaunchKeyboard?: boolean;
+  /**
+   * Append `!cb` / `<ol>` keyboard fallback under MiniApp cards. Default false —
+   * the structured keyboard is enough for aware clients; stock clients use the
+   * plain link when `includePlainLink` is on.
+   */
+  includeKeyboardFallback?: boolean;
+  /**
+   * Mirror the launch URL onto top-level `content.url`. Default false (avoids
+   * colliding with the Matrix media convention `url = mxc://`). Forced on when
+   * `studnovsuCompat` is used.
+   */
+  topLevelUrl?: boolean;
 }
 
 export interface RetryOptions {
@@ -448,6 +494,8 @@ export interface BotCreateOptions {
   handlerTimeoutMs?: number;
   /** MiniApp platform configuration. */
   miniApp?: MiniAppOptions;
+  /** Defaults for `answer` / `reply` / `sendMessageWithOptions`. */
+  messageDefaults?: MessageDefaults;
   /**
    * Callback token registry. Default: HMAC-signed tokens using `callbackSecret`
    * or the MiniApp secret. Pass `new CallbackRegistry()` for process-local opaque tokens.

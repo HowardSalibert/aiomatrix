@@ -206,6 +206,28 @@ describe("keyboard tokenisation on send", () => {
     assert.equal(content.format, "org.matrix.custom.html");
     assert.match(content.formatted_body, /<ol>/);
   });
+
+  it("skips the plaintext fallback when keyboardFallback is false", () => {
+    const keyboard = new InlineKeyboard().text("Yes", "y");
+    const { content } = buildMessageContent(
+      { text: "Question?" },
+      { keyboard, keyboardFallback: false },
+      target(new CallbackRegistry()),
+    );
+    assert.equal(content.body, "Question?");
+    assert.ok(!content.body.includes("!cb"));
+    assert.ok(content[KEYBOARD_CONTENT_KEY]);
+  });
+
+  it("renders markdown when parseMode is markdown", () => {
+    const { content } = buildMessageContent(
+      { text: "**hi**" },
+      { parseMode: "markdown" },
+      target(new CallbackRegistry()),
+    );
+    assert.match(content.formatted_body, /<strong>hi<\/strong>/);
+    assert.equal(content.body, "**hi**");
+  });
 });
 
 describe("CallbackRegistry", () => {

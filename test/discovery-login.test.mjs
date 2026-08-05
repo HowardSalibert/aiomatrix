@@ -17,6 +17,7 @@ import {
   loadSession,
   loginWithPassword,
   logout,
+  pruneOtherDevices,
   normalizeHomeserverUrl,
   refreshAccessToken,
   saveSession,
@@ -380,5 +381,36 @@ describe("token lifecycle", () => {
     });
     assert.deepEqual(await listDevices(http), [{ device_id: "A" }]);
     assert.deepEqual(await listDevices(http), []);
+  });
+
+  it("prunes other devices while keeping the current one", async () => {
+    const fetchImpl = mockFetch([
+      {
+        body: {
+          devices: [
+            { device_id: "KEEP", last_seen_ts: Date.now() },
+            { device_id: "OLD", last_seen_ts: 1 },
+            { device_id: "GHOST" },
+          ],
+        },
+      },
+      { body: {} },
+    ]);
+    const http = new MatrixHttp("https://hs.example.org", {
+      accessToken: "tok",
+      logger: silent,
+      fetchImpl,
+    });
+    const result = await pruneOtherDevices(http, {
+      keepDeviceId: "KEEP",
+      auth: { type: "m.login.password", password: "pw" },
+    });
+    assert.deepEqual(result.deleted.sort(), ["GHOST", "OLD"]);
+    assert.equal(result.kept, "KEEP");
+    assert.match(fetchImpl.calls[1].url, /\/delete_devices$/);
+    assert.deepEqual(JSON.parse(fetchImpl.calls[1].init.body).devices.sort(), [
+      "GHOST",
+      "OLD",
+    ]);
   });
 });

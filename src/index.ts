@@ -103,7 +103,7 @@ export { MemoryAsyncUsedTokenStore, MemoryUsedTokenStore } from "./token-store.j
 export type { AsyncUsedTokenStore, UsedTokenStore } from "./token-store.js";
 
 // --------------------------------------------------------------------- HTML
-export { MATRIX_ALLOWED_TAGS, fmt, html, sanitizeMatrixHtml } from "./html.js";
+export { MATRIX_ALLOWED_TAGS, fmt, html, markdownToHtml, sanitizeMatrixHtml } from "./html.js";
 export type { SanitizeOptions } from "./html.js";
 
 // ------------------------------------------------------------------- MiniApp
@@ -157,14 +157,22 @@ export { discoverHomeserver, getServerVersions, isUserId, serverNameFromUserId }
 export type { DiscoveryResult } from "./discovery.js";
 export {
   clearSession,
+  deleteDevice,
+  deleteDevices,
   listDevices,
   loadSession,
   loginWithPassword,
   logout,
+  pruneOtherDevices,
   refreshAccessToken,
   saveSession,
 } from "./login.js";
-export type { MatrixSession, PasswordLoginOptions } from "./login.js";
+export type {
+  MatrixDeviceInfo,
+  MatrixSession,
+  PasswordLoginOptions,
+  PruneOtherDevicesOptions,
+} from "./login.js";
 export {
   createSessionRefreshHandler,
   diagnoseSession,

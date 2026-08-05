@@ -173,16 +173,111 @@ export async function logout(http: MatrixHttp): Promise<void> {
   await http.request("POST", "/_matrix/client/v3/logout", null, {}, { maxRetries: 1 });
 }
 
+export interface MatrixDeviceInfo {
+  device_id: string;
+  display_name?: string;
+  last_seen_ts?: number;
+  last_seen_ip?: string;
+}
+
 /** List the account's devices — useful for cleaning up stale bot devices. */
-export async function listDevices(
-  http: MatrixHttp,
-): Promise<Array<{ device_id: string; display_name?: string; last_seen_ts?: number }>> {
+export async function listDevices(http: MatrixHttp): Promise<MatrixDeviceInfo[]> {
   const resp = await http.request<unknown>("GET", "/_matrix/client/v3/devices");
   const devices = isPlainObject(resp) ? resp.devices : null;
   if (!Array.isArray(devices)) return [];
-  return devices.filter(isPlainObject) as Array<{
-    device_id: string;
-    display_name?: string;
-    last_seen_ts?: number;
-  }>;
+  const out: MatrixDeviceInfo[] = [];
+  for (const raw of devices) {
+    if (!isPlainObject(raw)) continue;
+    const device_id = readString(raw, "device_id");
+    if (!device_id) continue;
+    const info: MatrixDeviceInfo = { device_id };
+    const display_name = readString(raw, "display_name");
+    if (display_name) info.display_name = display_name;
+    const last_seen_ts = readNumber(raw, "last_seen_ts");
+    if (last_seen_ts !== undefined) info.last_seen_ts = last_seen_ts;
+    const last_seen_ip = readString(raw, "last_seen_ip");
+    if (last_seen_ip) info.last_seen_ip = last_seen_ip;
+    out.push(info);
+  }
+  return out;
+}
+
+/**
+ * Delete one device. Homeservers usually require UIA — pass `auth` (e.g.
+ * `m.login.password`) or call {@link deleteDevices} which retries with session.
+ */
+export async function deleteDevice(
+  http: MatrixHttp,
+  deviceId: string,
+  auth?: Record<string, unknown>,
+): Promise<void> {
+  await deleteDevices(http, [deviceId], auth);
+}
+
+/**
+ * Delete devices via `POST /delete_devices`, completing UIA when the HS asks.
+ */
+export async function deleteDevices(
+  http: MatrixHttp,
+  deviceIds: string[],
+  auth?: Record<string, unknown>,
+): Promise<void> {
+  if (deviceIds.length === 0) return;
+  const body: Record<string, unknown> = { devices: deviceIds };
+  if (auth) body.auth = auth;
+
+  try {
+    await http.request("POST", "/_matrix/client/v3/delete_devices", null, body, {
+      maxRetries: 0,
+    });
+  } catch (err) {
+    if (!(err instanceof MatrixApiError) || err.status !== 401 || !auth) throw err;
+    const session = readString(err.body, "session");
+    if (!session) throw err;
+    await http.request(
+      "POST",
+      "/_matrix/client/v3/delete_devices",
+      null,
+      { devices: deviceIds, auth: { ...auth, session } },
+      { maxRetries: 0 },
+    );
+  }
+}
+
+export interface PruneOtherDevicesOptions {
+  /** Device id to keep (usually the current bot device). */
+  keepDeviceId: string;
+  /** Only delete devices with `last_seen_ts` older than this (ms ago). */
+  olderThanMs?: number;
+  /** Cap how many devices to delete in one call. Default 64. */
+  limit?: number;
+  /**
+   * UIA auth dict for `/delete_devices` (typically password login).
+   * Required on most homeservers.
+   */
+  auth?: Record<string, unknown>;
+}
+
+/**
+ * Remove other devices on this account so Megolm fanout does not target ghost
+ * bots left behind by `relocateSession({ wipeCrypto: true })` / redeploys.
+ */
+export async function pruneOtherDevices(
+  http: MatrixHttp,
+  options: PruneOtherDevicesOptions,
+): Promise<{ deleted: string[]; kept: string }> {
+  const devices = await listDevices(http);
+  const cutoff =
+    options.olderThanMs !== undefined ? Date.now() - options.olderThanMs : null;
+  const limit = Math.max(1, options.limit ?? 64);
+  const victims = devices
+    .filter((d) => d.device_id && d.device_id !== options.keepDeviceId)
+    .filter((d) => {
+      if (cutoff == null) return true;
+      return typeof d.last_seen_ts === "number" ? d.last_seen_ts <= cutoff : true;
+    })
+    .map((d) => d.device_id)
+    .slice(0, limit);
+  await deleteDevices(http, victims, options.auth);
+  return { deleted: victims, kept: options.keepDeviceId };
 }

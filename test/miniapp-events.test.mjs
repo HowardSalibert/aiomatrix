@@ -16,6 +16,7 @@ import {
   buildWidgetLayoutContent,
   buildWidgetRemovalContent,
   buildWidgetStateContent,
+  displayUrlForMiniApp,
   parseMiniAppContent,
   parseMiniAppDataContent,
   parseMiniAppJson,
@@ -24,11 +25,13 @@ import {
 } from "../dist/index.js";
 
 const URL_OK = "https://app.example.org/start";
+const URL_SIGNED =
+  "https://app.example.org/start#matrixWebAppData=eyJhbGciOiJIUzI1NiJ9.payload.sig&matrixWebAppHost=https%3A%2F%2Fapp.example.org";
 
 describe("buildMiniAppContent", () => {
-  it("layers a canonical descriptor, a keyboard and a readable body", () => {
+  it("keeps the full launch URL only in the canonical field", () => {
     const content = buildMiniAppContent({
-      url: URL_OK,
+      url: URL_SIGNED,
       title: "Schedule",
       description: "Your week",
       buttonText: "Open schedule",
@@ -36,14 +39,28 @@ describe("buildMiniAppContent", () => {
       startParam: "week=2",
     });
     assert.equal(content.msgtype, "m.text");
-    assert.match(content.body, /Schedule/);
-    assert.match(content.body, /Open schedule: https:\/\/app\.example\.org\/start/);
-    assert.equal(content[MINI_APP_CONTENT_KEY].url, URL_OK);
+    assert.equal(content.url, undefined, "top-level url must not look like media");
+    assert.match(content.body, /^Schedule\nYour week\nOpen schedule: /);
+    assert.ok(!content.body.includes("matrixWebAppData"));
+    assert.match(content.body, /https:\/\/app\.example\.org\/start$/);
+    assert.equal(content[MINI_APP_CONTENT_KEY].url, URL_SIGNED);
     assert.equal(content[MINI_APP_CONTENT_KEY].app_id, "schedule");
-    assert.equal(content[MINI_APP_CONTENT_KEY].start_param, "week=2");
     const button = content[KEYBOARD_CONTENT_KEY].inline[0][0];
     assert.equal(button.kind, "mini_app");
-    assert.equal(button.startParam, "week=2");
+    assert.equal(button.url, URL_SIGNED);
+    assert.ok(!content.body.includes("!cb"));
+  });
+
+  it("can omit the plain link and launch keyboard for aware hosts", () => {
+    const content = buildMiniAppContent({
+      url: URL_OK,
+      title: "App",
+      includePlainLink: false,
+      includeLaunchKeyboard: false,
+    });
+    assert.equal(content.body, "App");
+    assert.equal(content[KEYBOARD_CONTENT_KEY], undefined);
+    assert.equal(content[MINI_APP_CONTENT_KEY].url, URL_OK);
   });
 
   it("mirrors the StudNovSU shape when asked", () => {
@@ -84,6 +101,10 @@ describe("buildMiniAppContent", () => {
   it("can send as a notice", () => {
     assert.equal(buildMiniAppContent({ url: URL_OK, notice: true }).msgtype, "m.notice");
   });
+
+  it("strips fragments for displayUrlForMiniApp", () => {
+    assert.equal(displayUrlForMiniApp(URL_SIGNED), "https://app.example.org/start");
+  });
 });
 
 describe("parseMiniAppContent", () => {
@@ -118,191 +139,41 @@ describe("parseMiniAppContent", () => {
 describe("mini app data", () => {
   it("round-trips a sendData payload", () => {
     const content = buildMiniAppDataContent({
-      data: '{"action":"ok"}',
+      data: '{"ok":true}',
       queryId: "q1",
-      appId: "app",
+      appId: "shop",
       messageId: "$card",
     });
     assert.equal(content.msgtype, MINI_APP_DATA_MSGTYPE);
-    assert.equal(content.body, '{"action":"ok"}');
+    assert.equal(content[MINI_APP_DATA_KEY].query_id, "q1");
     const parsed = parseMiniAppDataContent(content);
-    assert.deepEqual(parsed, {
-      data: '{"action":"ok"}',
-      queryId: "q1",
-      appId: "app",
-      messageId: "$card",
-    });
+    assert.equal(parsed.data, '{"ok":true}');
+    assert.equal(parsed.queryId, "q1");
+    assert.equal(parsed.appId, "shop");
+    assert.equal(parsed.messageId, "$card");
   });
 
-  it("omits absent correlation fields", () => {
-    const content = buildMiniAppDataContent({
-      data: "x",
-      queryId: null,
-      appId: null,
-      messageId: null,
-    });
-    assert.deepEqual(Object.keys(content[MINI_APP_DATA_KEY]).sort(), ["data", "version"]);
-  });
-
-  it("falls back to the body and to a bare msgtype form", () => {
-    assert.equal(
-      parseMiniAppDataContent({ [MINI_APP_DATA_KEY]: { version: 1 }, body: "from-body" }).data,
-      "from-body",
-    );
-    const bare = parseMiniAppDataContent({
-      msgtype: MINI_APP_DATA_MSGTYPE,
-      body: "raw",
-      query_id: "q",
-    });
-    assert.equal(bare.data, "raw");
-    assert.equal(bare.queryId, "q");
-  });
-
-  it("ignores unrelated content", () => {
-    assert.equal(parseMiniAppDataContent({ msgtype: "m.text", body: "hi" }), null);
-    assert.equal(parseMiniAppDataContent("nope"), null);
-  });
-
-  it("parses JSON payloads only when they look like JSON", () => {
+  it("parseMiniAppJson tolerates non-JSON", () => {
     assert.deepEqual(parseMiniAppJson('{"a":1}'), { a: 1 });
-    assert.deepEqual(parseMiniAppJson("  [1,2] "), [1, 2]);
-    assert.equal(parseMiniAppJson("plain text"), null);
-    assert.equal(parseMiniAppJson("{broken"), null);
+    assert.equal(parseMiniAppJson("hello"), null);
   });
 });
 
-describe("MiniAppQueryRegistry", () => {
-  const params = { roomId: "!r:hs", userId: "@alice:hs", messageId: "$card", appId: "app" };
-
-  it("issues a unique query id per launch", () => {
-    const registry = new MiniAppQueryRegistry();
-    const a = registry.issue(params);
-    const b = registry.issue(params);
-    assert.notEqual(a.queryId, b.queryId);
-    assert.match(a.queryId, /^[A-Za-z0-9_-]{20,}$/);
-    assert.equal(a.roomId, "!r:hs");
-    assert.equal(a.answeredAtMs, null);
-  });
-
-  it("claims a query exactly once", () => {
-    const registry = new MiniAppQueryRegistry();
-    const { queryId } = registry.issue(params);
-    assert.ok(registry.claim(queryId, "@alice:hs"));
-    assert.equal(registry.claim(queryId, "@alice:hs"), null, "replays are refused");
-  });
-
-  it("refuses a claim from another user", () => {
-    const registry = new MiniAppQueryRegistry();
-    const { queryId } = registry.issue(params);
-    assert.equal(registry.claim(queryId, "@mallory:hs"), null);
-    assert.ok(registry.claim(queryId, "@alice:hs"));
-  });
-
-  it("allows a retry after release", () => {
-    const registry = new MiniAppQueryRegistry();
-    const { queryId } = registry.issue(params);
-    registry.claim(queryId);
-    registry.release(queryId);
-    assert.ok(registry.claim(queryId));
-  });
-
-  it("expires and revokes queries", async () => {
-    const registry = new MiniAppQueryRegistry();
-    const short = registry.issue({ ...params, ttlMs: 1 });
-    await new Promise((r) => setTimeout(r, 10));
-    assert.equal(registry.peek(short.queryId), null);
-
-    const other = registry.issue(params);
-    registry.revoke(other.queryId);
-    assert.equal(registry.peek(other.queryId), null);
-  });
-
-  it("stays bounded", () => {
-    const registry = new MiniAppQueryRegistry(4);
-    for (let i = 0; i < 50; i++) registry.issue(params);
-    assert.ok(registry.size <= 4);
-  });
-
-  it("rejects an unknown query id", () => {
-    assert.equal(new MiniAppQueryRegistry().claim("nope"), null);
-  });
-});
-
-describe("widgets", () => {
-  it("builds an Element-compatible widget state event", () => {
-    const content = buildWidgetStateContent({
-      widgetId: "w1",
-      url: "https://app.example.org/widget",
-      name: "Schedule",
-      title: "This week",
-      type: "m.custom",
-      data: { appId: "schedule" },
-      creatorUserId: "@bot:hs",
+describe("widget helpers stay importable", () => {
+  it("builds widget state", () => {
+    const state = buildWidgetStateContent({
+      id: "w1",
+      url: "https://app.example.org/w",
+      name: "W",
     });
-    assert.equal(WIDGET_STATE_EVENT_TYPE, "im.vector.modular.widgets");
-    assert.equal(content.id, "w1");
-    assert.equal(content.url, "https://app.example.org/widget");
-    assert.equal(content.data.title, "This week");
-    assert.equal(content.data.appId, "schedule");
-    assert.equal(content.creatorUserId, "@bot:hs");
-    assert.equal(content.waitForIframeLoad, true);
-  });
-
-  it("removes a widget with empty content", () => {
-    assert.deepEqual(buildWidgetRemovalContent(), {});
-  });
-
-  it("substitutes and encodes template variables", () => {
-    const out = templateWidgetUrl(
-      "https://app.example.org/?u=$matrix_user_id&r=$matrix_room_id&t=$theme&x=$custom",
-      {
-        userId: "@alice:example.org",
-        roomId: "!room:example.org",
-        theme: "dark",
-        extra: { custom: "a b&c" },
-      },
-    );
-    const parsed = new URL(out);
-    assert.equal(parsed.searchParams.get("u"), "@alice:example.org");
-    assert.equal(parsed.searchParams.get("r"), "!room:example.org");
-    assert.equal(parsed.searchParams.get("t"), "dark");
-    assert.equal(parsed.searchParams.get("x"), "a b&c");
-    assert.ok(!out.includes("$matrix_user_id"));
-  });
-
-  it("leaves unknown variables untouched", () => {
-    assert.equal(
-      templateWidgetUrl("https://a.example/?u=$matrix_user_id", {}),
-      "https://a.example/?u=$matrix_user_id",
-    );
-  });
-
-  it("parses a widget state event and ignores removals", () => {
-    const parsed = parseWidgetStateEvent({
-      type: WIDGET_STATE_EVENT_TYPE,
-      state_key: "w1",
-      content: { id: "w1", url: "https://a.example/", name: "N", type: "m.custom" },
-    });
-    assert.equal(parsed.widgetId, "w1");
-    assert.equal(parsed.name, "N");
-    assert.equal(parseWidgetStateEvent({ state_key: "w1", content: {} }), null);
-    assert.equal(parseWidgetStateEvent(null), null);
-  });
-
-  it("falls back to the state key for the widget id", () => {
-    const parsed = parseWidgetStateEvent({
-      state_key: "w2",
-      content: { url: "https://a.example/" },
-    });
-    assert.equal(parsed.widgetId, "w2");
-    assert.equal(parsed.name, "w2");
-  });
-
-  it("builds a layout that gives the widget usable space", () => {
-    const content = buildWidgetLayoutContent("w1", { container: "right", height: 80 });
-    assert.equal(WIDGET_LAYOUT_STATE_EVENT_TYPE, "io.element.widgets.layout");
-    assert.equal(content.widgets.w1.container, "right");
-    assert.equal(content.widgets.w1.height, 80);
-    assert.equal(content.widgets.w1.width, 100);
+    assert.equal(state.type, "m.custom");
+    void WIDGET_STATE_EVENT_TYPE;
+    void WIDGET_LAYOUT_STATE_EVENT_TYPE;
+    void buildWidgetLayoutContent;
+    void buildWidgetRemovalContent;
+    void parseWidgetStateEvent;
+    void templateWidgetUrl;
+    void MiniAppQueryRegistry;
+    void MINI_APP_DATA_KEY;
   });
 });

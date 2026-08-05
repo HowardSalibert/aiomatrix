@@ -5,6 +5,27 @@ semantic versioning.
 
 ## Unreleased
 
+## 0.6.1
+
+### Breaking
+
+- **MiniApp cards no longer set top-level `content.url`** (that field means `mxc://` media). The
+  signed launch URL lives only in `dev.aiomatrix.mini_app.url`. Opt back in with `topLevelUrl` /
+  `studnovsuCompat`. Body is title + description + a short hash-stripped link (not the JWT fragment);
+  `!cb` keyboard dump is off by default for MiniApps (`includeKeyboardFallback`).
+
+### Added
+
+- **`SendOptions.keyboardFallback`** / **`messageDefaults`**: aware hosts can omit `!cb` / `<ol>`
+  dumps while keeping `dev.aiomatrix.keyboard` (default remains on for stock clients).
+- **`parseMode: "markdown"`** plus `replyMarkdown` / `answerMarkdown` / `markdownToHtml`
+  (`**bold**`, `_italic_`, code, links).
+- **Short `!cb` aliases** for signed callbacks (JWT stays in keyboard JSON only).
+- MiniApp send flags: `includePlainLink`, `includeLaunchKeyboard`, `includeKeyboardFallback`,
+  `topLevelUrl` (bot `miniApp.*` defaults + per-call overrides).
+- **Device GC:** `listDevices`, `deleteDevice(s)`, `pruneOtherDevices`, and
+  `relocateSession({ pruneOtherDevices: true })` to drop ghost bot devices after crypto wipes.
+
 ## 0.6.0
 
 ### Breaking

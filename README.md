@@ -2,7 +2,7 @@
 
 [![CI](https://github.com/HowardSalibert/aiomatrix/actions/workflows/ci.yml/badge.svg)](https://github.com/HowardSalibert/aiomatrix/actions/workflows/ci.yml)
 [![npm](https://img.shields.io/npm/v/aiomatrix.svg)](https://www.npmjs.com/package/aiomatrix)
-[![Socket Badge](https://badge.socket.dev/npm/package/aiomatrix/0.6.0)](https://badge.socket.dev/npm/package/aiomatrix/0.6.0)
+[![Socket Badge](https://badge.socket.dev/npm/package/aiomatrix/0.6.1)](https://badge.socket.dev/npm/package/aiomatrix/0.6.1)
 
 An aiogram-style framework for Matrix bots: routers, filters, FSM, middleware, inline keyboards,
 end-to-end encryption, and a MiniApp platform modelled on Telegram WebApps.
@@ -298,9 +298,11 @@ Full walkthrough, protocol details, and a client example: [MINIAPP.md](./MINIAPP
 
 Report vulnerabilities privately: [SECURITY.md](./SECURITY.md). Hardening log: [AUDIT.md](./AUDIT.md).
 
-- **HTML is a trust boundary.** `ctx.reply(text)` is plain text and always safe. `ctx.replyHtml`
-  sends HTML; run untrusted input through `sanitizeMatrixHtml()`, or build it with the `html`
-  tagged template, which escapes interpolations for you.
+- **HTML is a trust boundary.** `ctx.reply(text)` is plain text and always safe.
+  `ctx.replyMarkdown("**hi**")` / `parseMode: "markdown"` covers light markup; `ctx.replyHtml`
+  sends HTML — run untrusted input through `sanitizeMatrixHtml()`, or build it with the `html`
+  tagged template, which escapes interpolations for you. Aware clients can set
+  `messageDefaults: { keyboardFallback: false }` to skip `!cb` dumps.
 - **Plain HTTP is refused.** The access token travels on every request, so a non-localhost `http://`
   homeserver throws `ConfigurationError` unless you set `allowInsecureHomeserver: true`.
 - **No secrets are logged.** Access tokens, `Authorization` headers, and full sync bodies never
@@ -360,6 +362,8 @@ await relocateSession({
   user: "@bot:example.org",
   password: process.env.MATRIX_PASSWORD!,
   wipeCrypto: true,
+  // Drop ghost devices so Megolm fanout does not target old bot sessions:
+  pruneOtherDevices: true,
 });
 ```
 

@@ -1,5 +1,10 @@
 import { MiniAppAuthError } from "../errors.js";
-import { InlineKeyboard, KEYBOARD_CONTENT_KEY, isSafeButtonUrl } from "../keyboards.js";
+import {
+  InlineKeyboard,
+  KEYBOARD_CONTENT_KEY,
+  isSafeButtonUrl,
+  renderKeyboardFallback,
+} from "../keyboards.js";
 import { escapeHtml, isPlainObject, readString } from "../util.js";
 
 /** Canonical content field describing a MiniApp launch card. */
@@ -15,6 +20,12 @@ export const MINI_APP_SCHEMA_VERSION = 1;
 export interface MiniAppCardOptions {
   /** URL of the mini app. Must be https (or http on localhost). */
   url: string;
+  /**
+   * URL shown in the plain-text body when {@link includePlainLink} is on.
+   * Defaults to `url` with the hash stripped (signed `#matrixWebAppData=…`
+   * stays only in {@link MINI_APP_CONTENT_KEY}).
+   */
+  displayUrl?: string;
   title?: string;
   /** Plain-text body shown by clients without mini app support. */
   body?: string;
@@ -39,6 +50,27 @@ export interface MiniAppCardOptions {
   studnovsuCompat?: boolean;
   /** Send as a notice instead of a text message. */
   notice?: boolean;
+  /**
+   * Put a short plain link in body/HTML. Default true. The link uses
+   * {@link displayUrl} (hash-stripped) so signed launch blobs never dump into
+   * the timeline.
+   */
+  includePlainLink?: boolean;
+  /**
+   * Attach a `mini_app` keyboard row (plus any extra `keyboard` rows).
+   * Default true.
+   */
+  includeLaunchKeyboard?: boolean;
+  /**
+   * Append `!cb` / `<ol>` keyboard fallback. Default false — aware clients
+   * read `dev.aiomatrix.keyboard`; stock clients use the plain link.
+   */
+  includeKeyboardFallback?: boolean;
+  /**
+   * Mirror the launch URL onto top-level `content.url`. Default false — that
+   * field means `mxc://` media in Matrix. Forced true when `studnovsuCompat`.
+   */
+  topLevelUrl?: boolean;
 }
 
 export interface MiniAppCard {
@@ -53,13 +85,28 @@ export interface MiniAppCard {
   display?: "sheet" | "fullscreen" | "inline";
 }
 
+/** Strip `#fragment` so stock clients get a readable https link. */
+export function displayUrlForMiniApp(url: string): string {
+  try {
+    const parsed = new URL(url);
+    parsed.hash = "";
+    return parsed.toString();
+  } catch {
+    const hash = url.indexOf("#");
+    return hash >= 0 ? url.slice(0, hash) : url;
+  }
+}
+
 /**
  * Build the `m.room.message` content for a MiniApp launch card.
  *
- * The result carries three layers so it works everywhere:
- * 1. `dev.aiomatrix.mini_app` — canonical descriptor for aiomatrix-aware hosts;
- * 2. top-level `url`/`title` plus the StudNovSU msgtype when requested;
- * 3. a plain-text/HTML body with the link, so stock clients stay usable.
+ * Layers:
+ * 1. `dev.aiomatrix.mini_app` — full launch URL (may include signed hash);
+ * 2. optional structured keyboard for aware clients;
+ * 3. lean body (title + description [+ short plain link]) for stock clients.
+ *
+ * Top-level `content.url` is omitted by default so hosts do not treat the
+ * card as encrypted media (`mxc://` convention).
  */
 export function buildMiniAppContent(options: MiniAppCardOptions): Record<string, unknown> {
   // The URL is rendered as a link in the HTML fallback, so refuse anything but
@@ -72,6 +119,12 @@ export function buildMiniAppContent(options: MiniAppCardOptions): Record<string,
   }
   const title = options.title ?? "Mini app";
   const buttonText = options.buttonText ?? "Open";
+  const includePlainLink = options.includePlainLink !== false;
+  const includeLaunchKeyboard = options.includeLaunchKeyboard !== false;
+  const includeKeyboardFallback = options.includeKeyboardFallback === true;
+  const topLevelUrl = options.topLevelUrl === true || options.studnovsuCompat === true;
+  const displayUrl = options.displayUrl ?? displayUrlForMiniApp(options.url);
+
   const card: MiniAppCard = { version: MINI_APP_SCHEMA_VERSION, url: options.url };
   if (options.title) card.title = options.title;
   if (options.description) card.description = options.description;
@@ -81,19 +134,19 @@ export function buildMiniAppContent(options: MiniAppCardOptions): Record<string,
   if (options.startParam) card.start_param = options.startParam;
   if (options.display) card.display = options.display;
 
-  const keyboard = options.keyboard ?? new InlineKeyboard();
-  const withLaunch = InlineKeyboard.from([
-    [
-      options.startParam
-        ? { kind: "mini_app", text: buttonText, url: options.url, startParam: options.startParam }
-        : { kind: "mini_app", text: buttonText, url: options.url },
-    ],
-    ...keyboard.buttons,
-  ]);
-
   const bodyLines = [title];
   if (options.description) bodyLines.push(options.description);
-  bodyLines.push(`${buttonText}: ${options.url}`);
+  if (includePlainLink) bodyLines.push(`${buttonText}: ${displayUrl}`);
+
+  const htmlParts = [
+    `<p><strong>${escapeHtml(title)}</strong></p>`,
+    options.description ? `<p>${escapeHtml(options.description)}</p>` : "",
+  ];
+  if (includePlainLink) {
+    htmlParts.push(
+      `<p><a href="${escapeHtml(displayUrl)}">${escapeHtml(buttonText)}</a></p>`,
+    );
+  }
 
   const content: Record<string, unknown> = {
     msgtype: options.studnovsuCompat
@@ -103,20 +156,47 @@ export function buildMiniAppContent(options: MiniAppCardOptions): Record<string,
         : "m.text",
     body: options.body ?? bodyLines.join("\n"),
     format: "org.matrix.custom.html",
-    formatted_body: [
-      `<p><strong>${escapeHtml(title)}</strong></p>`,
-      options.description ? `<p>${escapeHtml(options.description)}</p>` : "",
-      `<p><a href="${escapeHtml(options.url)}">${escapeHtml(buttonText)}</a></p>`,
-    ]
-      .filter(Boolean)
-      .join(""),
-    // Top-level fields mirror the StudNovSU schema.
-    url: options.url,
+    formatted_body: htmlParts.filter(Boolean).join(""),
     title,
     [MINI_APP_CONTENT_KEY]: card,
-    [KEYBOARD_CONTENT_KEY]: withLaunch.toContent(),
   };
+
+  if (topLevelUrl) content.url = options.url;
   if (options.botId) content.bot_id = options.botId;
+
+  if (includeLaunchKeyboard || options.keyboard) {
+    const extra = options.keyboard?.buttons ?? [];
+    const rows = includeLaunchKeyboard
+      ? [
+          [
+            options.startParam
+              ? {
+                  kind: "mini_app" as const,
+                  text: buttonText,
+                  url: options.url,
+                  startParam: options.startParam,
+                }
+              : { kind: "mini_app" as const, text: buttonText, url: options.url },
+          ],
+          ...extra,
+        ]
+      : [...extra];
+    if (rows.length > 0) {
+      const withLaunch = InlineKeyboard.from(rows);
+      const keyboardContent = withLaunch.toContent();
+      content[KEYBOARD_CONTENT_KEY] = keyboardContent;
+      if (includeKeyboardFallback) {
+        const fallback = renderKeyboardFallback(keyboardContent);
+        if (fallback.text) {
+          content.body = `${content.body}\n\n${fallback.text}`;
+        }
+        if (fallback.html) {
+          content.formatted_body = `${content.formatted_body}${fallback.html}`;
+        }
+      }
+    }
+  }
+
   return content;
 }
 

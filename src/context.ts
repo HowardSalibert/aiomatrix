@@ -25,9 +25,10 @@ import type {
   SendOptions,
   ToDeviceContext,
   UpdateType,
+  FsmStrategy,
+  MessageDefaults,
 } from "./types.js";
 import type { CommandObject } from "./commands.js";
-import type { FsmStrategy } from "./types.js";
 import { isPlainObject, readString } from "./util.js";
 
 export interface ContextDeps {
@@ -37,6 +38,7 @@ export interface ContextDeps {
   storage: Storage;
   callbacks: CallbackTokenStore;
   fsm?: { strategy?: FsmStrategy; namespace?: string; ttlMs?: number };
+  messageDefaults?: MessageDefaults;
 }
 
 interface ContextInit {
@@ -128,24 +130,55 @@ abstract class ContextBase<T extends UpdateType> implements BaseContext<T> {
     return null;
   }
 
+  /** Merge bot-level {@link MessageDefaults} under per-call options. */
+  protected withDefaults(options?: SendOptions): SendOptions | undefined {
+    const defaults = this.deps.messageDefaults;
+    if (!defaults) return options;
+    return {
+      ...(defaults.keyboardFallback !== undefined
+        ? { keyboardFallback: defaults.keyboardFallback }
+        : {}),
+      ...(defaults.parseMode !== undefined ? { parseMode: defaults.parseMode } : {}),
+      ...options,
+    };
+  }
+
   answer(text: string, options?: SendOptions): Promise<string> {
-    return sendMessageWithOptions(this.sendTarget(), { text }, options);
+    return sendMessageWithOptions(this.sendTarget(), { text }, this.withDefaults(options));
   }
 
   answerHtml(htmlBody: string, options?: SendOptions): Promise<string> {
-    return sendMessageWithOptions(this.sendTarget(), { html: htmlBody }, options);
+    return sendMessageWithOptions(
+      this.sendTarget(),
+      { html: htmlBody },
+      this.withDefaults(options),
+    );
+  }
+
+  /** Like {@link answer} with `parseMode: "markdown"`. */
+  answerMarkdown(text: string, options?: SendOptions): Promise<string> {
+    return this.answer(text, { ...options, parseMode: "markdown" });
   }
 
   reply(text: string, options?: SendOptions): Promise<string> {
-    return sendMessageWithOptions(this.sendTarget(), { text }, { replyTo: true, ...options });
+    return sendMessageWithOptions(
+      this.sendTarget(),
+      { text },
+      this.withDefaults({ replyTo: true, ...options }),
+    );
   }
 
   replyHtml(htmlBody: string, options?: SendOptions): Promise<string> {
     return sendMessageWithOptions(
       this.sendTarget(),
       { html: htmlBody },
-      { replyTo: true, ...options },
+      this.withDefaults({ replyTo: true, ...options }),
     );
+  }
+
+  /** Like {@link reply} with `parseMode: "markdown"`. */
+  replyMarkdown(text: string, options?: SendOptions): Promise<string> {
+    return this.reply(text, { ...options, parseMode: "markdown" });
   }
 
   async react(key: string): Promise<string> {
