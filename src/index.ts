@@ -170,12 +170,14 @@ export {
   diagnoseSession,
   loadPersistedDeviceId,
   relocateSession,
+  resolveCryptoStorePassphrase,
   savePersistedDeviceId,
   wipeCryptoStore,
 } from "./session-recovery.js";
 export type {
   RelocateSessionOptions,
   SessionDiagnosis,
+  SessionRefreshHandlerOptions,
   SessionSuggestedAction,
 } from "./session-recovery.js";
 export { DEFAULT_POWER_LEVELS, RoomCache } from "./room-cache.js";
@@ -212,6 +214,7 @@ export {
   normalizeToDeviceBody,
   parseToDeviceRecipients,
   resolveEncryptionSharePolicy,
+  shouldRotateEveryMessage,
 } from "./crypto-policy.js";
 export type { CryptoEngine, CryptoEngineCreateOptions } from "./crypto.js";
 export {

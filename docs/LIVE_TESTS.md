@@ -1,11 +1,12 @@
 # Live homeserver tests
 
-Megolm round-trip, cold start, and revoked-token behaviour against a real Synapse.
+Megolm round-trip, cold start, revoked-token → `onFatal`, refresh_token exchange, and mid-run
+password re-login against a real Synapse.
 
 ## CI
 
 The `live` job in `.github/workflows/ci.yml` runs `npm run test:live:ci` on Ubuntu
-(Docker Synapse + Node 22). Suites share one bot/peer session storage and Synapse
+(Docker Synapse + Node 24). Suites share one bot/peer session storage and Synapse
 login rate limits are relaxed for the ephemeral homeserver.
 
 ## Local

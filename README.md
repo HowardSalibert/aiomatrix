@@ -2,7 +2,7 @@
 
 [![CI](https://github.com/HowardSalibert/aiomatrix/actions/workflows/ci.yml/badge.svg)](https://github.com/HowardSalibert/aiomatrix/actions/workflows/ci.yml)
 [![npm](https://img.shields.io/npm/v/aiomatrix.svg)](https://www.npmjs.com/package/aiomatrix)
-[![Socket Badge](https://badge.socket.dev/npm/package/aiomatrix/0.4.0)](https://badge.socket.dev/npm/package/aiomatrix/0.4.0)
+[![Socket Badge](https://badge.socket.dev/npm/package/aiomatrix/0.6.0)](https://badge.socket.dev/npm/package/aiomatrix/0.6.0)
 
 An aiogram-style framework for Matrix bots: routers, filters, FSM, middleware, inline keyboards,
 end-to-end encryption, and a MiniApp platform modelled on Telegram WebApps.
@@ -13,7 +13,7 @@ npm install aiomatrix
 npm install @matrix-org/matrix-sdk-crypto-nodejs
 ```
 
-Node >= 20.10, ESM only.
+Node >= 24, ESM only.
 
 ## Hello bot
 

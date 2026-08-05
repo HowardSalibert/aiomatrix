@@ -32,6 +32,7 @@ import { RoomCache, type HistoryVisibilityName, type PowerLevels } from "./room-
 import {
   createSessionRefreshHandler,
   loadPersistedDeviceId,
+  resolveCryptoStorePassphrase,
   savePersistedDeviceId,
 } from "./session-recovery.js";
 import { SyncLoop, type JoinedRoomSync, type SyncResponse } from "./sync.js";
@@ -1053,6 +1054,7 @@ export class MatrixClient {
 
   async stop(): Promise<void> {
     this.stopping = true;
+    this.queue.close();
     const loop = this.syncLoop;
     this.syncLoop = null;
     if (loop) {
@@ -1248,31 +1250,37 @@ export class MatrixClient {
       return;
     }
 
-    await this.queue.run(roomId, async () => {
-      let event: Record<string, unknown> = raw;
-      let decrypted = false;
-      if (raw.type === "m.room.encrypted") {
-        if (!this.crypto?.isReady) {
-          this.logger.warn(`skipping encrypted event in ${roomId}: crypto is not ready`);
-          return;
+    try {
+      await this.queue.run(roomId, async () => {
+        if (this.stopping || !this.handlers.onRoomEvent) return;
+        let event: Record<string, unknown> = raw;
+        let decrypted = false;
+        if (raw.type === "m.room.encrypted") {
+          if (!this.crypto?.isReady) {
+            this.logger.warn(`skipping encrypted event in ${roomId}: crypto is not ready`);
+            return;
+          }
+          try {
+            event = await this.crypto.decryptRoomEvent(roomId, raw);
+            decrypted = true;
+          } catch (err) {
+            this.logger.warn(
+              `decrypt failed in ${roomId}; queued for retry when the key arrives`,
+              err,
+            );
+            return;
+          }
         }
-        try {
-          event = await this.crypto.decryptRoomEvent(roomId, raw);
-          decrypted = true;
-        } catch (err) {
-          this.logger.warn(
-            `decrypt failed in ${roomId}; queued for retry when the key arrives`,
-            err,
-          );
-          return;
-        }
-      }
-      this.handlers.onRoomEvent?.(roomId, event as MatrixEvent, {
-        historical,
-        decrypted,
-        lateDecrypt: false,
+        this.handlers.onRoomEvent?.(roomId, event as MatrixEvent, {
+          historical,
+          decrypted,
+          lateDecrypt: false,
+        });
       });
-    });
+    } catch (err) {
+      if (this.stopping && err instanceof ConfigurationError) return;
+      throw err;
+    }
   }
 
   /** Track all joined members of a room for E2EE device discovery. */
@@ -1399,13 +1407,24 @@ export async function createMatrixClient(options: BotCreateOptions): Promise<Cre
     );
   }
 
+  let http!: MatrixHttp;
   const httpOptions: ConstructorParameters<typeof MatrixHttp>[1] = {
     accessToken,
     logger,
     onTokenExpired: createSessionRefreshHandler({
       storagePath,
-      homeserverUrl,
+      homeserverUrl: () => homeserverUrl,
+      onHomeserverUrl: (url) => {
+        homeserverUrl = url;
+        http.setBaseUrl(url);
+      },
       logger,
+      autoRelogin,
+      ...(loginUser ? { userId: loginUser } : {}),
+      ...(options.password ? { password: options.password } : {}),
+      ...(options.deviceDisplayName
+        ? { deviceDisplayName: options.deviceDisplayName }
+        : {}),
       ...(options.fetchImpl ? { fetchImpl: options.fetchImpl } : {}),
       ...(options.allowInsecureHomeserver ? { allowInsecure: true } : {}),
     }),
@@ -1421,7 +1440,7 @@ export async function createMatrixClient(options: BotCreateOptions): Promise<Cre
     ...(options.fetchImpl ? { fetchImpl: options.fetchImpl } : {}),
     ...(options.onRequest ? { onRequest: options.onRequest } : {}),
   };
-  const http = new MatrixHttp(homeserverUrl, httpOptions);
+  http = new MatrixHttp(homeserverUrl, httpOptions);
 
   let whoami: { user_id: string; device_id?: string };
   try {
@@ -1438,7 +1457,7 @@ export async function createMatrixClient(options: BotCreateOptions): Promise<Cre
       clearSession(storagePath);
       await passwordLogin(sessionDeviceId ?? loadPersistedDeviceId(storagePath));
       http.setAccessToken(accessToken);
-      // Refresh handler was bound to the previous homeserver URL; recreate if it moved.
+      http.setBaseUrl(homeserverUrl);
       whoami = await http.request<{ user_id: string; device_id?: string }>(
         "GET",
         "/_matrix/client/v3/account/whoami",
@@ -1473,13 +1492,21 @@ export async function createMatrixClient(options: BotCreateOptions): Promise<Cre
     }
     const cryptoPath = path.join(storagePath, "crypto");
     fs.mkdirSync(cryptoPath, { recursive: true });
+    const storePassphrase = resolveCryptoStorePassphrase(
+      storagePath,
+      options.cryptoStorePassphrase,
+      {
+        ...(options.allowUnencryptedCryptoStore ? { allowUnencrypted: true } : {}),
+        logger,
+      },
+    );
     const Engine = await loadCryptoEngine();
     crypto = await Engine.create({
       userId,
       deviceId,
       storePath: cryptoPath,
       http,
-      storePassphrase: options.cryptoStorePassphrase ?? null,
+      storePassphrase,
       logger,
       ...(options.encryption ? { encryption: options.encryption } : {}),
       ...(options.onCryptoLog ? { onCryptoLog: options.onCryptoLog } : {}),

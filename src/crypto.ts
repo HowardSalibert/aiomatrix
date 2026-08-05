@@ -1,6 +1,7 @@
 import {
   Attachment,
   BackupDecryptionKey,
+  CollectStrategy,
   DeviceId,
   DeviceLists,
   EncryptedAttachment,
@@ -25,13 +26,23 @@ import {
   normalizeToDeviceBody,
   parseToDeviceRecipients,
   resolveEncryptionSharePolicy,
+  shouldRotateEveryMessage,
 } from "./crypto-policy.js";
 import { RoomKeyWithheldError } from "./errors.js";
-import type { MatrixHttp } from "./http.js";
+import { MatrixApiError, type MatrixHttp } from "./http.js";
 import { createDefaultLogger, type Logger } from "./logger.js";
 import type { HistoryVisibilityName } from "./room-cache.js";
 import type { CryptoLogEvent, EncryptionSharePolicy } from "./types.js";
-import { AsyncLock, LruCache, fingerprintSet, isPlainObject } from "./util.js";
+import { AsyncLock, LruCache, fingerprintSet, isPlainObject, readString } from "./util.js";
+
+/** Map legacy boolean share flags onto crypto-nodejs 0.6 `CollectStrategy`. */
+export function collectStrategyForPolicy(
+  policy: Required<EncryptionSharePolicy>,
+): CollectStrategy {
+  if (policy.onlyAllowTrustedDevices) return CollectStrategy.OnlyTrustedDevices;
+  if (policy.errorOnVerifiedUserProblem) return CollectStrategy.ErrorOnVerifiedUserProblem;
+  return CollectStrategy.AllDevices;
+}
 
 export type { HistoryVisibilityName } from "./room-cache.js";
 export {
@@ -40,6 +51,7 @@ export {
   normalizeToDeviceBody,
   parseToDeviceRecipients,
   resolveEncryptionSharePolicy,
+  shouldRotateEveryMessage,
 } from "./crypto-policy.js";
 
 /** Map a Matrix `history_visibility` string to the crypto enum (default Shared). */
@@ -173,7 +185,7 @@ export class CryptoEngine {
     const passphrase = options.storePassphrase ?? null;
     if (!passphrase) {
       logger.warn(
-        "crypto store passphrase is empty — the OlmMachine SQLite store is unencrypted on disk (set cryptoStorePassphrase)",
+        "crypto store passphrase is empty — the OlmMachine SQLite store is unencrypted on disk",
       );
     }
     const machine = await OlmMachine.initialize(
@@ -416,23 +428,20 @@ export class CryptoEngine {
       await this.machine.markRequestAsSent(request.id, RequestType.KeysBackup, "{}");
       return;
     }
-    try {
-      const resp = await this.http.request(
-        "PUT",
-        "/_matrix/client/v3/room_keys/keys",
-        { version: this.keyBackupVersion },
-        JSON.parse(request.body) as unknown,
-        { idempotent: true },
-      );
-      await this.machine.markRequestAsSent(
-        request.id,
-        RequestType.KeysBackup,
-        JSON.stringify(resp),
-      );
-    } catch (err) {
-      this.logger.warn("key backup upload failed", err);
-      await this.machine.markRequestAsSent(request.id, RequestType.KeysBackup, "{}");
-    }
+    // On failure leave the request unacked so the machine can retry — marking
+    // sent with "{}" would silently drop keys and make wipe recovery impossible.
+    const resp = await this.http.request(
+      "PUT",
+      "/_matrix/client/v3/room_keys/keys",
+      { version: this.keyBackupVersion },
+      JSON.parse(request.body) as unknown,
+      { idempotent: true },
+    );
+    await this.machine.markRequestAsSent(
+      request.id,
+      RequestType.KeysBackup,
+      JSON.stringify(resp),
+    );
   }
 
   /**
@@ -578,7 +587,7 @@ export class CryptoEngine {
    */
   private shareIsFresh(roomId: string, peers: string[]): boolean {
     const policy = this.sharePolicy;
-    if (policy.rotateEveryMessage) return false;
+    if (shouldRotateEveryMessage(policy, peers.length)) return false;
     const state = this.shareState.get(roomId);
     if (!state) return false;
     if (state.memberFingerprint !== fingerprintSet(peers)) return false;
@@ -612,13 +621,12 @@ export class CryptoEngine {
       }
 
       const policy = this.sharePolicy;
+      const rotateNow = shouldRotateEveryMessage(policy, peers.length);
 
       // Refresh identity keys before share. When rotating every message, query
       // all peers (peer wipe / same device_id must not use a stale KeysQuery
       // cache). Otherwise only peers marked dirty by device-list sync.
-      const stale = policy.rotateEveryMessage
-        ? peers
-        : peers.filter((u) => this.dirtyUsers.has(u));
+      const stale = rotateNow ? peers : peers.filter((u) => this.dirtyUsers.has(u));
       if (stale.length > 0) {
         await this.machine.receiveSyncChanges(
           "[]",
@@ -640,10 +648,9 @@ export class CryptoEngine {
       settings.historyVisibility = mapHistoryVisibility(
         this.historyVisibilityForRoom?.(roomId),
       );
-      settings.onlyAllowTrustedDevices = policy.onlyAllowTrustedDevices;
-      settings.errorOnVerifiedUserProblem = policy.errorOnVerifiedUserProblem;
+      settings.sharingStrategy = collectStrategyForPolicy(policy);
       settings.rotationPeriodMessages = BigInt(
-        policy.rotateEveryMessage ? 1 : Math.max(1, policy.rotationPeriodMessages),
+        rotateNow ? 1 : Math.max(1, policy.rotationPeriodMessages),
       );
       // The Rust API expects microseconds.
       settings.rotationPeriod = BigInt(Math.max(1, policy.rotationPeriodMs)) * 1000n;
@@ -872,12 +879,48 @@ export class CryptoEngine {
     return Attachment.decrypt(attachment);
   }
 
-  /** Publish cross-signing keys so users can verify this bot's device. */
-  async bootstrapCrossSigning(reset = false): Promise<void> {
+  /**
+   * Publish cross-signing keys so users can verify this bot's device.
+   * Homeservers usually require UIA on `/keys/device_signing/upload` — pass
+   * `auth` (e.g. `m.login.password`) when available.
+   */
+  async bootstrapCrossSigning(
+    reset = false,
+    auth?: Record<string, unknown>,
+  ): Promise<void> {
     await this.lock.run(async () => {
-      await this.machine.bootstrapCrossSigning(reset);
+      const reqs = await this.machine.bootstrapCrossSigning(reset);
+      if (reqs.uploadKeysReq) {
+        await this.dispatchRequest(reqs.uploadKeysReq);
+      }
+      const signingBody = JSON.parse(reqs.uploadSigningKeysReq) as Record<string, unknown>;
+      await this.uploadDeviceSigningKeys(signingBody, auth);
+      await this.dispatchRequest(reqs.uploadSignaturesReq);
       await this.runOutgoingRequestsUnlocked();
     });
+  }
+
+  private async uploadDeviceSigningKeys(
+    body: Record<string, unknown>,
+    auth?: Record<string, unknown>,
+  ): Promise<void> {
+    const post = (payload: Record<string, unknown>) =>
+      this.http.request(
+        "POST",
+        "/_matrix/client/v3/keys/device_signing/upload",
+        null,
+        payload,
+        { maxRetries: 0 },
+      );
+
+    try {
+      await post(auth ? { ...body, auth } : body);
+    } catch (err) {
+      if (!(err instanceof MatrixApiError) || err.status !== 401 || !auth) throw err;
+      const session = readString(err.body, "session");
+      if (!session) throw err;
+      await post({ ...body, auth: { ...auth, session } });
+    }
   }
 
   async crossSigningStatus(): Promise<{

@@ -138,6 +138,23 @@ describe("DispatchQueue", () => {
     gate.resolve();
     await Promise.all(tasks);
   });
+
+  it("rejects pending and new work after close", async () => {
+    const queue = new DispatchQueue(1);
+    const gate = deferred();
+    const running = queue.run("!a:hs", async () => {
+      await gate.promise;
+    });
+    const pending = queue.run("!b:hs", async () => {
+      throw new Error("should not run");
+    });
+    await tick();
+    queue.close();
+    await assert.rejects(pending, /DispatchQueue closed/);
+    gate.resolve();
+    await running;
+    await assert.rejects(queue.run("!c:hs", async () => {}), /DispatchQueue closed/);
+  });
 });
 
 describe("EventDeduper", () => {

@@ -146,9 +146,12 @@ export class Dispatcher {
   async feed(ctx: AnyContext): Promise<boolean> {
     this.stats.received += 1;
     let handled = false;
+    const abort = new AbortController();
+    ctx.abortController = abort;
 
     const routeUpdate: Handler<never> = (async () => {
       for (const router of this.routers) {
+        if (abort.signal.aborted) return;
         if (await router.feed(ctx)) {
           handled = true;
           return;
@@ -160,11 +163,12 @@ export class Dispatcher {
     try {
       const run = (): Promise<void> => runChain(this.outerMiddlewares, ctx, routeUpdate);
       if (this.handlerTimeoutMs > 0) {
-        await this.withTimeout(run(), ctx);
+        await this.withTimeout(run(), ctx, abort);
       } else {
         await run();
       }
     } catch (err) {
+      abort.abort(err);
       this.stats.errors += 1;
       if (err instanceof HandlerTimeoutError) this.stats.timeouts += 1;
       const wasHandled = await this.runErrorHandlers(err, ctx);
@@ -176,19 +180,21 @@ export class Dispatcher {
     return handled;
   }
 
-  private async withTimeout(promise: Promise<void>, ctx: AnyContext): Promise<void> {
+  private async withTimeout(
+    promise: Promise<void>,
+    ctx: AnyContext,
+    abort: AbortController,
+  ): Promise<void> {
     let timer: NodeJS.Timeout | undefined;
     const timeout = new Promise<never>((_, reject) => {
-      timer = setTimeout(
-        () =>
-          reject(
-            new HandlerTimeoutError(
-              this.handlerTimeoutMs,
-              `${ctx.updateType} in ${ctx.roomId || "(no room)"}`,
-            ),
-          ),
-        this.handlerTimeoutMs,
-      );
+      timer = setTimeout(() => {
+        const err = new HandlerTimeoutError(
+          this.handlerTimeoutMs,
+          `${ctx.updateType} in ${ctx.roomId || "(no room)"}`,
+        );
+        abort.abort(err);
+        reject(err);
+      }, this.handlerTimeoutMs);
       if (typeof timer.unref === "function") timer.unref();
     });
     try {

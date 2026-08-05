@@ -327,6 +327,40 @@ export class MiniAppServer {
     return verifySessionToken(raw, this.options.secret);
   }
 
+  /** Overlay live membership/power when `resolveRoomAuth` is configured. */
+  private async refreshSessionAuth(session: MiniAppSession): Promise<MiniAppSession> {
+    if (!this.options.resolveRoomAuth || !session.roomId) return session;
+    const live = await this.options.resolveRoomAuth(session.userId, session.roomId);
+    if (!live) return session;
+    return {
+      ...session,
+      membership: live.membership,
+      powerLevel: live.powerLevel,
+    };
+  }
+
+  /** Re-check membership/power gates against (possibly refreshed) session fields. */
+  private enforceSessionGates(session: MiniAppSession): void {
+    const needMembership = this.options.requireMembership;
+    const needPower = this.options.minPowerLevel;
+    if (!needMembership && needPower === undefined) return;
+    const membership = session.membership ?? null;
+    const powerLevel =
+      typeof session.powerLevel === "number" ? session.powerLevel : null;
+    if (needMembership && (!membership || !needMembership.includes(membership as never))) {
+      throw new MiniAppAuthError(
+        `MiniApp auth requires membership in [${needMembership.join(", ")}] (got ${membership ?? "unknown"})`,
+        "forbidden",
+      );
+    }
+    if (needPower !== undefined && (powerLevel == null || powerLevel < needPower)) {
+      throw new MiniAppAuthError(
+        `MiniApp auth requires power level >= ${needPower} (got ${powerLevel ?? "unknown"})`,
+        "forbidden",
+      );
+    }
+  }
+
   /** Route a request. Returns a plain response object the host can write out. */
   async handle(request: MiniAppRequest): Promise<MiniAppResponse> {
     const origin = headerValue(request.headers, "origin");
@@ -384,6 +418,8 @@ export class MiniAppServer {
       let session: MiniAppSession;
       try {
         session = this.verify(headerValue(request.headers, "authorization"));
+        session = await this.refreshSessionAuth(session);
+        this.enforceSessionGates(session);
       } catch (err) {
         return this.authError(err, cors);
       }
@@ -399,7 +435,8 @@ export class MiniAppServer {
 
     if (route === "/me" && method === "GET") {
       try {
-        const session = this.verify(headerValue(request.headers, "authorization"));
+        let session = this.verify(headerValue(request.headers, "authorization"));
+        session = await this.refreshSessionAuth(session);
         return this.json(200, { ok: true, session }, cors);
       } catch (err) {
         return this.authError(err, cors);
@@ -408,7 +445,7 @@ export class MiniAppServer {
 
     if (route === "/room-auth" && method === "GET") {
       try {
-        const session = this.verify(headerValue(request.headers, "authorization"));
+        let session = this.verify(headerValue(request.headers, "authorization"));
         if (!this.options.resolveRoomAuth) {
           return this.json(
             200,
@@ -426,14 +463,14 @@ export class MiniAppServer {
         if (!session.roomId) {
           return this.json(400, { error: "no_room" }, cors);
         }
-        const live = await this.options.resolveRoomAuth(session.userId, session.roomId);
+        session = await this.refreshSessionAuth(session);
         return this.json(
           200,
           {
             ok: true,
             source: "live",
-            membership: live?.membership ?? null,
-            power_level: live?.powerLevel ?? null,
+            membership: session.membership ?? null,
+            power_level: session.powerLevel ?? null,
             room_id: session.roomId,
             user_id: session.userId,
           },

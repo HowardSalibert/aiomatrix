@@ -425,8 +425,20 @@ describe("inline keyboard callbacks", () => {
     );
   });
 
-  it("passes through a client-supplied payload when no token was minted", async () => {
+  it("rejects unsigned callback payloads by default", async () => {
     const { bot } = await makeBot();
+    assert.equal(
+      await bot.readCallbackEvent(ROOM, {
+        type: "dev.aiomatrix.callback",
+        sender: USER,
+        content: { data: "raw:1", message_id: "$c" },
+      }),
+      null,
+    );
+  });
+
+  it("accepts unsigned callback payloads when allowUnsignedCallbacks is set", async () => {
+    const { bot } = await makeBot({ allowUnsignedCallbacks: true });
     const read = await bot.readCallbackEvent(ROOM, {
       type: "dev.aiomatrix.callback",
       sender: USER,

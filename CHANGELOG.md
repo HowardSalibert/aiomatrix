@@ -5,6 +5,40 @@ semantic versioning.
 
 ## Unreleased
 
+## 0.6.0
+
+### Breaking
+
+- **Node.js >= 24** (aligns with `@matrix-org/matrix-sdk-crypto-nodejs` ^0.6.1).
+- **Native crypto 0.6:** Megolm share uses `CollectStrategy` (`onlyAllowTrustedDevices` /
+  `errorOnVerifiedUserProblem` map onto it). `bootstrapCrossSigning` uploads the returned
+  signing-key requests (with optional password UIA).
+- **Unsigned `dev.aiomatrix.callback` payloads rejected by default.** Opt in with
+  `allowUnsignedCallbacks: true` if a custom client must send raw `content.data`.
+- **Crypto store passphrase required** unless `allowUnencryptedCryptoStore: true`. When omitted, a
+  random passphrase is generated and persisted as `storagePath/crypto-passphrase.json`.
+
+### Added
+
+- **Mid-run password re-login** via `onTokenExpired` when `refresh_token` is missing/fails and
+  `autoReloginOnAuthFailure` + `password` are set. `MatrixHttp.setBaseUrl` follows delegated HS URLs.
+- **`rotateEveryMessageMaxPeers`** (default 32): per-message Megolm rotation stays on for DMs/small
+  rooms; larger rooms use period rotation to avoid a KeysQuery/share storm.
+- **`ctx.signal` / AbortController**: handler timeouts abort the signal; send helpers refuse after
+  timeout or bot stop. `DispatchQueue.close()` rejects pending work on `client.stop()`.
+- **`resolveCryptoStorePassphrase`**, **`shouldRotateEveryMessage`**, live helpers
+  `refreshMiniAppSessionRoomAuth` / `assertMiniAppJoinedLive` / `assertMiniAppPowerLive`.
+- **`bootstrapCrossSigning`** is invoked from `Bot.start` when the option is set.
+- Live tests: refresh_token exchange and mid-run password recovery.
+
+### Fixed
+
+- Failed key-backup uploads are no longer `markRequestAsSent` — the queue can retry.
+- MiniApp `/data` and `/me` refresh membership/power through `resolveRoomAuth` before gates.
+- Multi-instance footgun: warn when signed callback/query/nonce stores stay process-local.
+- Removed race-prone `RedisUsedTokenStore` from `examples/redis-stores` (async store only).
+- Docs: Socket badge / engines; clarify 0.3.0 Megolm note superseded by 0.3.1 / 0.6.0 peer cap.
+
 ## 0.5.0
 
 ### Added
@@ -123,8 +157,8 @@ basics are unchanged, but routing, contexts, and the client surface grew substan
 ### Performance
 
 - **Megolm share storm.** Share sets are cached per room and invalidated on device-list changes rather
-  than recomputed per message, and `rotateEveryMessage` now defaults to `false`. This removes the
-  `/keys/query` flood that made encrypted rooms unusable at any real membership size.
+  than recomputed per message. *(Superseded: 0.3.1 restored `rotateEveryMessage: true` for peer-wipe
+  correctness; 0.6.0 keeps that for small rooms and adds `rotateEveryMessageMaxPeers` for large ones.)*
 - **Undecryptable events are retried** from a bounded queue instead of being dropped when keys arrive
   a moment late.
 - `EventDeduper` evicts in amortized O(1) instead of `Array.shift()`.

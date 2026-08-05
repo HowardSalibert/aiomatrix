@@ -47,7 +47,7 @@ describe("package metadata", () => {
   });
 
   it("declares a Node floor the code actually needs", () => {
-    assert.match(pkg.engines.node, /^>=\s*20/);
+    assert.match(pkg.engines.node, /^>=\s*24/);
   });
 
   it("marks itself side-effect free for tree shaking", () => {

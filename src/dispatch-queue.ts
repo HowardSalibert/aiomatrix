@@ -1,8 +1,10 @@
+import { ConfigurationError } from "./errors.js";
 import { sleep } from "./util.js";
 
 interface Waiter {
   roomId: string;
   resume: () => void;
+  reject: (err: Error) => void;
 }
 
 /**
@@ -18,6 +20,7 @@ export class DispatchQueue {
   private globalActive = 0;
   private readonly roomActive = new Set<string>();
   private readonly waiters: Waiter[] = [];
+  private closed = false;
 
   constructor(globalLimit = 8) {
     this.globalLimit = Math.max(1, globalLimit);
@@ -31,9 +34,31 @@ export class DispatchQueue {
     return this.waiters.length;
   }
 
+  get isClosed(): boolean {
+    return this.closed;
+  }
+
+  /**
+   * Reject pending waiters and refuse new work. In-flight tasks still finish;
+   * callers should check a `stopping` flag after `acquire`.
+   */
+  close(): void {
+    if (this.closed) return;
+    this.closed = true;
+    const pending = this.waiters.splice(0);
+    const err = new ConfigurationError("DispatchQueue closed");
+    for (const waiter of pending) waiter.reject(err);
+  }
+
   async run<T>(roomId: string, fn: () => Promise<T>): Promise<T> {
+    if (this.closed) {
+      throw new ConfigurationError("DispatchQueue closed");
+    }
     await this.acquire(roomId);
     try {
+      if (this.closed) {
+        throw new ConfigurationError("DispatchQueue closed");
+      }
       return await fn();
     } finally {
       this.release(roomId);
@@ -59,18 +84,22 @@ export class DispatchQueue {
   }
 
   private acquire(roomId: string): Promise<void> {
+    if (this.closed) {
+      return Promise.reject(new ConfigurationError("DispatchQueue closed"));
+    }
     if (this.canRun(roomId)) {
       this.take(roomId);
       return Promise.resolve();
     }
-    return new Promise<void>((resolve) => {
-      this.waiters.push({ roomId, resume: resolve });
+    return new Promise<void>((resolve, reject) => {
+      this.waiters.push({ roomId, resume: resolve, reject });
     });
   }
 
   private release(roomId: string): void {
     this.globalActive = Math.max(0, this.globalActive - 1);
     this.roomActive.delete(roomId);
+    if (this.closed) return;
     // Wake the first waiter that can now proceed, preserving FIFO order.
     for (let i = 0; i < this.waiters.length; i++) {
       const waiter = this.waiters[i];

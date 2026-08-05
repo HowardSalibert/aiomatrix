@@ -168,7 +168,8 @@ export interface RequestTelemetry {
 
 /** Matrix Client-Server HTTP client with retry/throttle handling. */
 export class MatrixHttp {
-  readonly baseUrl: string;
+  private _baseUrl: string;
+  private allowInsecure: boolean;
   /** Defined non-enumerably in the constructor so logging cannot leak it. */
   private declare accessToken: string;
   private readonly logger: Logger;
@@ -189,8 +190,9 @@ export class MatrixHttp {
         ? { accessToken: accessTokenOrOptions }
         : (accessTokenOrOptions ?? {});
     this.logger = options.logger ?? createDefaultLogger();
-    this.baseUrl = normalizeHomeserverUrl(homeserverUrl, {
-      allowInsecure: options.allowInsecure,
+    this.allowInsecure = options.allowInsecure === true;
+    this._baseUrl = normalizeHomeserverUrl(homeserverUrl, {
+      allowInsecure: this.allowInsecure,
       logger: this.logger,
     });
     this.timeoutMs = options.timeoutMs ?? DEFAULT_TIMEOUT_MS;
@@ -202,7 +204,7 @@ export class MatrixHttp {
     this.fetchImpl = options.fetchImpl ?? globalThis.fetch;
     if (typeof this.fetchImpl !== "function") {
       throw new aiomatrixError(
-        "global fetch is unavailable — use Node >= 20 or pass fetchImpl",
+        "global fetch is unavailable — use Node >= 24 or pass fetchImpl",
       );
     }
     // Keep the token out of enumerable state so accidental JSON.stringify(http)
@@ -215,9 +217,25 @@ export class MatrixHttp {
     });
   }
 
+  /** Normalized homeserver base URL (no trailing slash). */
+  get baseUrl(): string {
+    return this._baseUrl;
+  }
+
   /** Replace the bearer token (after a login refresh). */
   setAccessToken(token: string): void {
     this.accessToken = token;
+  }
+
+  /**
+   * Update the homeserver base URL (e.g. after password re-login returns a
+   * different `well_known` / delegated homeserver).
+   */
+  setBaseUrl(homeserverUrl: string): void {
+    this._baseUrl = normalizeHomeserverUrl(homeserverUrl, {
+      allowInsecure: this.allowInsecure,
+      logger: this.logger,
+    });
   }
 
   hasAccessToken(): boolean {
