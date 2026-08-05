@@ -308,8 +308,10 @@ Report vulnerabilities privately: [SECURITY.md](./SECURITY.md). Hardening log: [
 - **Storage holds credentials.** `storagePath` contains the session, device id, crypto store, and
   MiniApp secret. Keep it out of version control and off shared volumes.
 - **One sync + crypto writer per device.** Callback and MiniApp query tokens are HMAC-signed by
-  default (shared secret). Scale MiniApp HTTP with a shared secret and a shared nonce/used-token
-  store — see `examples/redis-stores`. Do not run two syncers against the same crypto store.
+  default (shared secret). Scale MiniApp HTTP with a shared secret and a shared **async**
+  nonce/used-token store (`callbackAsyncUsedStore` / `miniApp.asyncQueryUsedStore`,
+  `examples/redis-stores`) — do not use the legacy sync Redis adapter for atomic claims.
+  Do not run two syncers against the same crypto store.
 
 ## Operations
 
@@ -340,6 +342,25 @@ of spinning:
 
 ```ts
 await Bot.create({ /* ... */, onFatal: (err) => { console.error(err); process.exit(1); } });
+```
+
+Password-login bots refresh access tokens automatically when the homeserver issued a
+`refresh_token` (wired through `MatrixHttp.onTokenExpired`). If the stored session is already
+dead at startup, `autoReloginOnAuthFailure` (default when `password` is set) password-logins again
+with the same device id. For ops recovery:
+
+```ts
+import { diagnoseSession, relocateSession, wipeCryptoStore } from "aiomatrix";
+
+console.log(diagnoseSession("./data"));
+// Soft recovery after DeviceMismatchError / spoiled crypto store:
+await relocateSession({
+  storagePath: "./data",
+  homeserverUrl: "example.org",
+  user: "@bot:example.org",
+  password: process.env.MATRIX_PASSWORD!,
+  wipeCrypto: true,
+});
 ```
 
 ## Subpath exports

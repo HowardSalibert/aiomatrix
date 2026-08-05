@@ -7,7 +7,7 @@ import type { Logger } from "./logger.js";
 import type { AsyncNonceStore, NonceStore } from "./miniapp/initdata.js";
 import type { MiniAppQueryStore } from "./miniapp/query.js";
 import type { Membership, PowerLevels } from "./room-cache.js";
-import type { UsedTokenStore } from "./token-store.js";
+import type { AsyncUsedTokenStore, UsedTokenStore } from "./token-store.js";
 
 /** Any Matrix event as delivered by `/sync` (subset that is always present). */
 export interface MatrixEvent {
@@ -342,6 +342,11 @@ export interface MiniAppOptions {
    * Required for single-answer semantics across processes.
    */
   queryUsedStore?: UsedTokenStore;
+  /**
+   * Async claim store for signed MiniApp query ids (multi-instance).
+   * When set, `claimAsync` is preferred over sync `claim`.
+   */
+  asyncQueryUsedStore?: AsyncUsedTokenStore;
   /** Shared launch nonce store for MiniAppServer (single-process sync API). */
   nonceStore?: NonceStore;
   /** Redis-style atomic nonce store for multi-instance MiniApp HTTP. */
@@ -427,6 +432,22 @@ export interface BotCreateOptions {
   callbackSecret?: string;
   /** Shared single-use/revoke store for signed callback tokens. */
   callbackUsedStore?: UsedTokenStore;
+  /**
+   * Async claim store for signed callback tokens (multi-instance).
+   * When set, callback resolution prefers `resolveAsync`.
+   */
+  callbackAsyncUsedStore?: AsyncUsedTokenStore;
+  /**
+   * When a persisted session's access token is rejected, password-login again
+   * reusing `device.json` / the previous device id. Default: `true` when
+   * `password` is provided, otherwise `false`.
+   */
+  autoReloginOnAuthFailure?: boolean;
+  /**
+   * How to handle `DeviceMismatchError` during crypto prepare.
+   * Default `"throw"`. `"wipe_crypto_and_relogin"` requires `password`.
+   */
+  onDeviceMismatch?: "throw" | "wipe_crypto_and_relogin";
   /** How FSM state is scoped and namespaced. */
   fsm?: { strategy?: FsmStrategy; namespace?: string; ttlMs?: number };
   /** Called when syncing dies unrecoverably (invalid token, revoked device). */

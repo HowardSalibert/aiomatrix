@@ -99,8 +99,8 @@ export type {
   KeyboardFallback,
   SignedCallbackRegistryOptions,
 } from "./keyboards.js";
-export { MemoryUsedTokenStore } from "./token-store.js";
-export type { UsedTokenStore } from "./token-store.js";
+export { MemoryAsyncUsedTokenStore, MemoryUsedTokenStore } from "./token-store.js";
+export type { AsyncUsedTokenStore, UsedTokenStore } from "./token-store.js";
 
 // --------------------------------------------------------------------- HTML
 export { MATRIX_ALLOWED_TAGS, fmt, html, sanitizeMatrixHtml } from "./html.js";
@@ -165,6 +165,19 @@ export {
   saveSession,
 } from "./login.js";
 export type { MatrixSession, PasswordLoginOptions } from "./login.js";
+export {
+  createSessionRefreshHandler,
+  diagnoseSession,
+  loadPersistedDeviceId,
+  relocateSession,
+  savePersistedDeviceId,
+  wipeCryptoStore,
+} from "./session-recovery.js";
+export type {
+  RelocateSessionOptions,
+  SessionDiagnosis,
+  SessionSuggestedAction,
+} from "./session-recovery.js";
 export { DEFAULT_POWER_LEVELS, RoomCache } from "./room-cache.js";
 export type { HistoryVisibilityName, Membership, PowerLevels, RoomInfo } from "./room-cache.js";
 export { DispatchQueue, EventDeduper } from "./dispatch-queue.js";
@@ -232,6 +245,7 @@ export {
   RequestTimeoutError,
   RoomKeyWithheldError,
 } from "./errors.js";
+export type { DeviceMismatchRecovery, DeviceMismatchSuggested } from "./errors.js";
 
 // --------------------------------------------------------------------- types
 export type {

@@ -353,7 +353,7 @@ describe("inline keyboard callbacks", () => {
       messageEventId: "$card",
       userId: USER,
     });
-    const read = bot.readCallbackEvent(ROOM, {
+    const read = await bot.readCallbackEvent(ROOM, {
       type: "dev.aiomatrix.callback",
       sender: USER,
       content: { token },
@@ -367,7 +367,7 @@ describe("inline keyboard callbacks", () => {
     const { bot } = await makeBot();
     const token = bot.callbacks.issue({ roomId: ROOM, data: "x", messageEventId: "$c" });
     assert.equal(
-      bot.readCallbackEvent("!other:example.org", {
+      await bot.readCallbackEvent("!other:example.org", {
         type: "dev.aiomatrix.callback",
         sender: USER,
         content: { token },
@@ -385,7 +385,7 @@ describe("inline keyboard callbacks", () => {
       userId: "@owner:example.org",
     });
     assert.equal(
-      bot.readCallbackEvent(ROOM, {
+      await bot.readCallbackEvent(ROOM, {
         type: "dev.aiomatrix.callback",
         sender: "@intruder:example.org",
         content: { token },
@@ -397,7 +397,7 @@ describe("inline keyboard callbacks", () => {
   it("accepts the plain-text !cb fallback", async () => {
     const { bot } = await makeBot();
     const token = bot.callbacks.issue({ roomId: ROOM, data: "page:2", messageEventId: "$c" });
-    const read = bot.readCallbackEvent(ROOM, {
+    const read = await bot.readCallbackEvent(ROOM, {
       type: "m.room.message",
       sender: USER,
       content: { msgtype: "m.text", body: `!cb ${token}` },
@@ -408,7 +408,7 @@ describe("inline keyboard callbacks", () => {
   it("ignores unrelated messages and unknown tokens", async () => {
     const { bot } = await makeBot();
     assert.equal(
-      bot.readCallbackEvent(ROOM, {
+      await bot.readCallbackEvent(ROOM, {
         type: "m.room.message",
         sender: USER,
         content: { msgtype: "m.text", body: "just chatting" },
@@ -416,7 +416,7 @@ describe("inline keyboard callbacks", () => {
       null,
     );
     assert.equal(
-      bot.readCallbackEvent(ROOM, {
+      await bot.readCallbackEvent(ROOM, {
         type: "dev.aiomatrix.callback",
         sender: USER,
         content: { token: "made-up" },
@@ -427,7 +427,7 @@ describe("inline keyboard callbacks", () => {
 
   it("passes through a client-supplied payload when no token was minted", async () => {
     const { bot } = await makeBot();
-    const read = bot.readCallbackEvent(ROOM, {
+    const read = await bot.readCallbackEvent(ROOM, {
       type: "dev.aiomatrix.callback",
       sender: USER,
       content: { data: "raw:1", message_id: "$c" },

@@ -153,9 +153,24 @@ const server = bot.createMiniAppServer({
   allowedOrigins: ["https://app.example.org"],
   sessionTtlSeconds: 3600,
   singleUseLaunch: true,
+  // Live PL/membership from the bot RoomCache (default when created via Bot).
+  // requireMembership: ["join"],
+  // minPowerLevel: 50,
 });
 
 http.createServer(server.nodeHandler()).listen(8080);
+```
+
+Launch cards signed by `Bot.createMiniAppLaunch` include a **snapshot** of the user's membership
+and power level in `room`. Those fields are copied into the session token. Snapshots can go stale —
+for moderator-gated writes prefer `resolveRoomAuth` / `GET /room-auth`, or the helpers:
+
+```ts
+import { assertMiniAppJoined, assertMiniAppPower } from "aiomatrix";
+
+const session = server.verify(req.headers.authorization);
+assertMiniAppJoined(session);
+assertMiniAppPower(session, 50); // fail-closed when powerLevel is null
 ```
 
 Routes, relative to `basePath` (default `/`):
@@ -164,7 +179,8 @@ Routes, relative to `basePath` (default `/`):
 |---|---|
 | `POST /auth` | Body `{ initData }`. Returns `{ token, expires_at, user, room, query_id, start_param }` |
 | `POST /data` | `Authorization: Bearer <token>`, body `{ data }`. Routes into the dispatcher |
-| `GET /me` | Returns the session behind a token |
+| `GET /me` | Returns the session behind a token (includes `membership` / `powerLevel` when present) |
+| `GET /room-auth` | Live or session room auth (`membership`, `power_level`) |
 | `GET /bridge.js` | The bridge script |
 | `OPTIONS *` | CORS preflight |
 

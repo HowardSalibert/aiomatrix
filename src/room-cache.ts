@@ -294,6 +294,10 @@ export class RoomCache {
     return this.rooms.get(roomId)?.powerLevels ?? DEFAULT_POWER_LEVELS;
   }
 
+  membershipOf(roomId: string, userId: string): Membership | undefined {
+    return this.rooms.get(roomId)?.members.get(userId);
+  }
+
   powerLevelOf(roomId: string, userId: string): number {
     const levels = this.powerLevels(roomId);
     return levels.users[userId] ?? levels.usersDefault;

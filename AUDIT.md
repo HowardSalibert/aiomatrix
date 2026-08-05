@@ -88,7 +88,9 @@ Problems found:
 
 ### Cycle 3 residual
 
-- `m.direct` cache not invalidated on account-data sync events (refresh via `getDirectRoomIds(true)` if needed).
+- ~~`m.direct` cache not invalidated on account-data sync events~~ — **fixed** in 0.3+/0.4
+  (`MatrixClient.handleSync` applies `m.direct` via `RoomCache.applyDirectAccountData`).
+  `getDirectRoomIds(true)` remains an escape hatch for forced refresh.
 
 ---
 

@@ -1,10 +1,10 @@
 /**
- * Redis adapters for multi-instance MiniApp HTTP.
+ * Redis adapters for multi-instance MiniApp HTTP and signed callback/query tokens.
  * Requires `redis` (node-redis v4+). Not a dependency of aiomatrix.
  *
  * Use RedisAsyncNonceStore via MiniAppServerOptions.asyncNonceStore.
- * Used-token store is sync-facing with a local cache; claim uniqueness is
- * SET NX in the background — warm hasAsync() on workers if you need reads.
+ * Use RedisAsyncUsedTokenStore via BotCreateOptions.callbackAsyncUsedStore /
+ * miniApp.asyncQueryUsedStore (awaited SET NX — no race between instances).
  */
 
 export interface RedisLike {
@@ -31,14 +31,53 @@ export class RedisAsyncNonceStore {
   }
 }
 
-/** Shared claim/revoke store for signed callback / MiniApp query tokens. */
-export class RedisUsedTokenStore {
-  private readonly local = new Map<string, number>();
-
+/**
+ * Async claim/revoke store for signed callback / MiniApp query tokens.
+ * Prefer this over the legacy sync RedisUsedTokenStore.
+ */
+export class RedisAsyncUsedTokenStore {
   constructor(
     private readonly redis: RedisLike,
     private readonly options: { prefix?: string; defaultTtlSeconds?: number } = {},
   ) {}
+
+  private key(token: string): string {
+    return `${this.options.prefix ?? "aio:used:"}${token}`;
+  }
+
+  async tryAdd(key: string, ttlMs?: number): Promise<boolean> {
+    const ttlSeconds = Math.max(
+      1,
+      Math.ceil((ttlMs ?? (this.options.defaultTtlSeconds ?? 86400) * 1000) / 1000),
+    );
+    const result = await this.redis.set(this.key(key), "1", { EX: ttlSeconds, NX: true });
+    return result === "OK";
+  }
+
+  async has(key: string): Promise<boolean> {
+    return (await this.redis.get(this.key(key))) !== null;
+  }
+
+  async delete(key: string): Promise<void> {
+    await this.redis.del(this.key(key));
+  }
+}
+
+/**
+ * @deprecated Prefer {@link RedisAsyncUsedTokenStore}. This sync-facing adapter
+ * used a local mark + fire-and-forget Redis SET NX and could return true on two
+ * instances for the same key.
+ */
+export class RedisUsedTokenStore {
+  private readonly local = new Map<string, number>();
+  private readonly asyncStore: RedisAsyncUsedTokenStore;
+
+  constructor(
+    redis: RedisLike,
+    private readonly options: { prefix?: string; defaultTtlSeconds?: number } = {},
+  ) {
+    this.asyncStore = new RedisAsyncUsedTokenStore(redis, options);
+  }
 
   private key(token: string): string {
     return `${this.options.prefix ?? "aio:used:"}${token}`;
@@ -55,37 +94,41 @@ export class RedisUsedTokenStore {
   }
 
   add(key: string, ttlMs?: number): void {
-    void this.tryAdd(key, ttlMs);
+    void this.tryAddAsync(key, ttlMs);
   }
 
   tryAdd(key: string, ttlMs?: number): boolean {
+    // Best-effort local gate only — callers needing atomicity must use
+    // RedisAsyncUsedTokenStore.tryAdd and await it.
     if (this.has(key)) return false;
     const ttlSeconds = Math.max(
       1,
       Math.ceil((ttlMs ?? (this.options.defaultTtlSeconds ?? 86400) * 1000) / 1000),
     );
     this.local.set(key, Date.now() + ttlSeconds * 1000);
-    void this.redis.set(this.key(key), "1", { EX: ttlSeconds, NX: true }).then((result) => {
-      if (result !== "OK") {
-        // Another instance won; keep local mark so subsequent has() is true.
-        this.local.set(key, Date.now() + ttlSeconds * 1000);
-      }
-    });
+    void this.tryAddAsync(key, ttlMs);
     return true;
+  }
+
+  async tryAddAsync(key: string, ttlMs?: number): Promise<boolean> {
+    const ok = await this.asyncStore.tryAdd(key, ttlMs);
+    if (ok) {
+      const ttlSeconds = Math.max(
+        1,
+        Math.ceil((ttlMs ?? (this.options.defaultTtlSeconds ?? 86400) * 1000) / 1000),
+      );
+      this.local.set(key, Date.now() + ttlSeconds * 1000);
+    }
+    return ok;
   }
 
   delete(key: string): void {
     this.local.delete(key);
-    void this.redis.del(this.key(key));
+    void this.asyncStore.delete(key);
   }
 
   async hasAsync(key: string): Promise<boolean> {
     if (this.has(key)) return true;
-    const hit = (await this.redis.get(this.key(key))) !== null;
-    if (hit) {
-      const ttl = this.options.defaultTtlSeconds ?? 86400;
-      this.local.set(key, Date.now() + ttl * 1000);
-    }
-    return hit;
+    return this.asyncStore.has(key);
   }
 }

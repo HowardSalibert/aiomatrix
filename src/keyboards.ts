@@ -1,6 +1,7 @@
 import * as crypto from "node:crypto";
 import {
   MemoryUsedTokenStore,
+  type AsyncUsedTokenStore,
   type UsedTokenStore,
 } from "./token-store.js";
 import { escapeHtml, isPlainObject, randomId, readString, timingSafeEqualStrings } from "./util.js";
@@ -354,6 +355,12 @@ export interface CallbackTokenStore {
   bind(tokens: readonly string[], messageEventId: string): void;
   peek(token: string, now?: number): CallbackTokenRecord | null;
   resolve(token: string, userId?: string, now?: number): CallbackTokenRecord | null;
+  /** Prefer this when an async used-token store is configured. */
+  resolveAsync?(
+    token: string,
+    userId?: string,
+    now?: number,
+  ): Promise<CallbackTokenRecord | null>;
   markAnswered(token: string): void;
   revoke(token: string): void;
   revokeForMessage(messageEventId: string): void;
@@ -492,6 +499,11 @@ export interface SignedCallbackRegistryOptions {
    * Share across instances (e.g. Redis) when `singleUse` must be global.
    */
   used?: UsedTokenStore;
+  /**
+   * Async single-use store for multi-instance claim. When set, prefer
+   * {@link SignedCallbackRegistry.resolveAsync}.
+   */
+  asyncUsed?: AsyncUsedTokenStore;
 }
 
 /**
@@ -502,6 +514,7 @@ export class SignedCallbackRegistry implements CallbackTokenStore {
   private readonly secret: string;
   private readonly ttlMs: number;
   private readonly used: UsedTokenStore;
+  private readonly asyncUsed: AsyncUsedTokenStore | null;
   /** Local message-id bindings and answered flags keyed by full token. */
   private readonly side = new Map<string, { messageEventId: string; answered: boolean }>();
   private readonly byMessage = new Map<string, Set<string>>();
@@ -513,6 +526,7 @@ export class SignedCallbackRegistry implements CallbackTokenStore {
     this.secret = options.secret;
     this.ttlMs = Math.max(1, options.ttlMs ?? 24 * 60 * 60 * 1000);
     this.used = options.used ?? new MemoryUsedTokenStore();
+    this.asyncUsed = options.asyncUsed ?? null;
   }
 
   issue(params: CallbackIssueParams): string {
@@ -564,12 +578,38 @@ export class SignedCallbackRegistry implements CallbackTokenStore {
   }
 
   resolve(token: string, userId?: string, now = Date.now()): CallbackTokenRecord | null {
+    if (this.asyncUsed) {
+      throw new TypeError(
+        "SignedCallbackRegistry has asyncUsed configured; call resolveAsync()",
+      );
+    }
     const record = this.peek(token, now);
     if (!record) return null;
     if (record.userId && userId && record.userId !== userId) return null;
     if (record.singleUse) {
       const ttl = Math.max(1, record.expiresAtMs - now);
       if (this.used.tryAdd) {
+        if (!this.used.tryAdd(deadKey(token), ttl)) return null;
+      } else {
+        this.used.add(deadKey(token), ttl);
+      }
+    }
+    return record;
+  }
+
+  async resolveAsync(
+    token: string,
+    userId?: string,
+    now = Date.now(),
+  ): Promise<CallbackTokenRecord | null> {
+    const record = this.peek(token, now);
+    if (!record) return null;
+    if (record.userId && userId && record.userId !== userId) return null;
+    if (record.singleUse) {
+      const ttl = Math.max(1, record.expiresAtMs - now);
+      if (this.asyncUsed) {
+        if (!(await this.asyncUsed.tryAdd(deadKey(token), ttl))) return null;
+      } else if (this.used.tryAdd) {
         if (!this.used.tryAdd(deadKey(token), ttl)) return null;
       } else {
         this.used.add(deadKey(token), ttl);
