@@ -92,6 +92,10 @@ export interface SendOptions {
 /** Bot-wide defaults for {@link SendOptions}. */
 export interface MessageDefaults {
   keyboardFallback?: boolean;
+  /**
+   * Default parse mode for `answer` / `reply` / `answerMiniAppQuery`.
+   * Bot.start applies `parseMode: "markdown"` unless you override this.
+   */
   parseMode?: ParseMode;
 }
 
@@ -494,7 +498,7 @@ export interface BotCreateOptions {
   handlerTimeoutMs?: number;
   /** MiniApp platform configuration. */
   miniApp?: MiniAppOptions;
-  /** Defaults for `answer` / `reply` / `sendMessageWithOptions`. */
+  /** Defaults for `answer` / `reply` / MiniApp answers. Markdown is on by default. */
   messageDefaults?: MessageDefaults;
   /**
    * Callback token registry. Default: HMAC-signed tokens using `callbackSecret`

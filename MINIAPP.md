@@ -217,14 +217,50 @@ await fetch("/api/miniapp/data", {
 ## 5. Handle the data in the bot
 
 ```ts
+import {
+  formatMiniAppDataPreview,
+  parseMiniAppPayload,
+  type MiniAppSubmitPayload,
+} from "aiomatrix";
+
 router.miniAppData(F.miniApp.action("submit"), async (ctx) => {
-  const items = (ctx.payload as { items: string[] }).items;
+  const payload = parseMiniAppPayload(ctx.raw) as MiniAppSubmitPayload | null;
+  const items = payload?.items ?? (ctx.payload as { items?: string[] })?.items ?? [];
   await ctx.answerWebAppQuery(`Order accepted: ${items.length} items`);
 });
 ```
 
 `ctx.raw` is the exact string the mini app sent, `ctx.payload` is the parsed JSON (or `null` if it
 wasn't JSON), `ctx.queryId` correlates with the launch, and `ctx.appId` identifies the app.
+
+### What shows up in the room?
+
+| Path | In the Matrix room? |
+|---|---|
+| `sendData` → HTTP `/data` → `feedMiniAppData` | **No** — in-process only |
+| Client posts `buildMiniAppDataContent({ data, … })` | **Yes** — human `body`, raw string only under `dev.aiomatrix.mini_app_data.data` |
+| `answerWebAppQuery` / `answerMiniAppQuery` | **Yes** — normal bot text (markdown by default since 0.6.2) |
+
+```ts
+// If a native client mirrors sendData into the timeline:
+import { buildMiniAppDataContent, formatMiniAppDataPreview } from "aiomatrix";
+
+room.sendEvent("m.room.message", buildMiniAppDataContent({
+  data: raw,
+  queryId,
+  appId: "shop",
+  messageId: "$card",
+  // body: "Saved",                    // optional override
+  // formatBody: (data, parsed) => …,  // custom humanizer
+  // hideFromStockClients: true,       // zero-width body for Element/Schildi
+}));
+
+formatMiniAppDataPreview('{"action":"submit","items":[1,2]}'); // "Submitted: 2 items"
+```
+
+Aware hosts: use `formatMessagePreview(content)` for room list / notifications instead of raw
+`content.body`. Full checklist: [AWARE_HOST.md](./AWARE_HOST.md). Custom copy:
+`examples/miniapp-humanizer.mjs`.
 
 Answering out of band works too, and reports whether the query was still live:
 
@@ -304,4 +340,6 @@ Mostly drop-in. Differences worth knowing:
 - `MiniAppQueryRegistry` — in-flight launches and replay protection
 - `MINIAPP_BRIDGE_SCRIPT`, `serveMiniAppBridge`, `buildBridgeInitMessage` — browser bridge
 - `buildMiniAppContent`, `buildMiniAppDataContent` — event content builders
+- `formatMiniAppDataPreview`, `formatMessagePreview`, `parseMiniAppPayload` — aware-host previews
 - `buildWidgetStateContent`, `buildWidgetLayoutContent`, `templateWidgetUrl`, `parseWidgetStateEvent`
+- [AWARE_HOST.md](./AWARE_HOST.md) — client checklist, legacy body normalization, device GC

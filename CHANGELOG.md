@@ -5,7 +5,30 @@ semantic versioning.
 
 ## Unreleased
 
+## 0.6.2
+
+### Breaking
+
+- **`buildMiniAppDataContent` no longer puts raw `sendData` JSON in `body`.** Body is a short
+  human summary (`formatMiniAppDataPreview`); JSON stays in `dev.aiomatrix.mini_app_data.data`.
+  Override with `body` / `summary` / `formatBody`, or `hideFromStockClients: true` for a
+  zero-width body.
+- **Bot replies default to `parseMode: "markdown"`** via `effectiveMessageDefaults()` (override
+  with `messageDefaults: { parseMode: "plain" }`).
+
+### Added
+
+- **`formatMiniAppDataPreview`**, **`formatMessagePreview`**, **`stripKeyboardFallbackText`** —
+  shared timeline / room-list / notification path for aware hosts.
+- Typed MiniApp payloads: `parseMiniAppPayload`, `MINI_APP_KNOWN_ACTIONS`, publish/submit/rsvp/…
+  interfaces + `MiniAppDataHumanizer`.
+- **`hideFromStockClients`** / custom `msgtype` on MiniApp data content.
+- **[AWARE_HOST.md](./AWARE_HOST.md)** — aware-host checklist, sendData vs answerWebAppQuery,
+  legacy normalization, `relocateSession({ pruneOtherDevices: true })` ops default.
+- `answerWebAppQuery` / `answerMiniAppQuery` honour message defaults.
+
 ## 0.6.1
+
 
 ### Breaking
 

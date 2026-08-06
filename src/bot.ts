@@ -57,6 +57,7 @@ import type {
   AnyContext,
   BotCreateOptions,
   MatrixEvent,
+  MessageDefaults,
   MiniAppDataContext,
   SendOptions,
 } from "./types.js";
@@ -322,9 +323,7 @@ export class Bot {
       storage: dispatcher.storage,
       callbacks: this.callbacks,
       ...(this.options.fsm ? { fsm: this.options.fsm } : {}),
-      ...(this.options.messageDefaults
-        ? { messageDefaults: this.options.messageDefaults }
-        : {}),
+      messageDefaults: this.effectiveMessageDefaults(),
     });
 
     await this.client.start({
@@ -406,6 +405,14 @@ export class Bot {
       pendingMiniAppQueries: this.miniAppQueries.size,
       scheduledJobs: this.scheduler.size,
     };
+  }
+
+  /**
+   * Effective send defaults. `parseMode: "markdown"` is on unless overridden so
+   * `reply("**hi**")` gets a `formatted_body` in stock clients.
+   */
+  effectiveMessageDefaults(): MessageDefaults {
+    return { parseMode: "markdown", ...this.options.messageDefaults };
   }
 
   private async verifyCryptoContract(): Promise<void> {
@@ -788,7 +795,7 @@ export class Bot {
           callbackUserId: record.userId,
         },
         options?.html ? { html: options.html } : { text },
-        options,
+        { ...this.effectiveMessageDefaults(), ...options },
       );
     } catch (err) {
       // Let the mini app retry rather than burning the query on a transient error.

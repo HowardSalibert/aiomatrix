@@ -462,7 +462,11 @@ class MiniAppDataContextImpl extends ContextBase<"mini_app_data"> implements Min
   }
 
   answerWebAppQuery(text: string, options?: SendOptions): Promise<string> {
-    return sendMessageWithOptions(this.sendTarget(), { text }, options);
+    return sendMessageWithOptions(
+      this.sendTarget(),
+      { text },
+      this.withDefaults(options),
+    );
   }
 }
 
