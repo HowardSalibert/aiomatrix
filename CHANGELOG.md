@@ -5,7 +5,37 @@ semantic versioning.
 
 ## Unreleased
 
+## 0.6.2
+
+### Breaking
+
+- **`buildMiniAppDataContent` no longer puts raw `sendData` JSON in `body`.** Body is a short
+  human summary (`formatMiniAppDataPreview`); JSON stays in `dev.aiomatrix.mini_app_data.data`.
+  Override with `body` / `summary` / `formatBody`, or `hideFromStockClients: true` for a
+  zero-width body.
+- **Bot replies default to `parseMode: "markdown"`** via `effectiveMessageDefaults()` (override
+  with `messageDefaults: { parseMode: "plain" }`). Plain strings without markup do **not** get a
+  `formatted_body`.
+- **`ctx.answerWebAppQuery` claims the MiniApp query** (same as `bot.answerMiniAppQuery`); a second
+  call throws when the query is already spent. Prefer `ctx.answerMiniAppQuery`.
+- **Callback used-tokens / aliases / binds default to files under `storagePath`** (survive restart
+  on one host). Multi-instance bots must still inject Redis stores.
+
+### Added
+
+- **`clientProfile: "aware" | "stock"`**, `AWARE_MESSAGE_DEFAULTS` / `AWARE_MINI_APP_DEFAULTS`.
+- **`normalizeAiomatrixContent`**, **`classifyAiomatrixContent`**, preview/strip helpers,
+  **`buildCallbackContent`**, typed MiniApp payloads, **`hideFromStockClients`**.
+- **`createFileSharedTokenStores`**, `FileUsedTokenStore`, durable alias/bind maps; flush on
+  `Bot.stop()`.
+- **`BotHealth.ok` / `syncStale`**, hooks `onSyncStale` / `onRateLimited` / `onStoreWarn`.
+- **`autoMarkRead`**, **`rateLimitBackoff`** middleware.
+- **`advertiseCapabilities`** / `dev.aiomatrix.bot` state (`BOT_CAPABILITIES_STATE_EVENT_TYPE`).
+- Redis helper **`createRedisSharedTokenStores`** in `examples/redis-stores`.
+- **[AWARE_HOST.md](./AWARE_HOST.md)** — full aware-host contract.
+
 ## 0.6.1
+
 
 ### Breaking
 

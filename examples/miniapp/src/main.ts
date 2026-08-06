@@ -45,11 +45,17 @@ const bot = await Bot.create({
   crypto: process.env.MATRIX_CRYPTO !== "false",
   autojoin: true,
   logger: (process.env.LOG_LEVEL as "debug" | undefined) ?? "info",
+  // Aware / mixed rooms: skip !cb dumps; markdown on by default (set plain to opt out).
+  messageDefaults: {
+    keyboardFallback: false,
+  },
   miniApp: {
     ...(process.env.MINIAPP_SECRET ? { secret: process.env.MINIAPP_SECRET } : {}),
     defaultUrl: `${publicUrl}/app`,
     allowedOrigins: [new URL(publicUrl).origin],
     initDataTtlSeconds: 3600,
+    includePlainLink: true,
+    includeKeyboardFallback: false,
   },
 });
 
@@ -80,7 +86,7 @@ router.message(Command("link", { description: "Get a raw signed launch link" }),
 router.miniAppData(F.miniApp.action("submit"), async (ctx) => {
   const payload = ctx.payload as { items?: string[]; note?: string };
   const items = payload.items ?? [];
-  const answered = await ctx.answerWebAppQuery(
+  const answered = await ctx.answerMiniAppQuery(
     items.length > 0
       ? `Order received: ${items.join(", ")}${payload.note ? ` (${payload.note})` : ""}`
       : "Empty order, nothing to do.",

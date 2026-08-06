@@ -1,6 +1,7 @@
+import { RateLimitedError } from "./errors.js";
 import { runChain } from "./router.js";
 import type { AnyContext, Handler, Middleware } from "./types.js";
-import { LruCache } from "./util.js";
+import { LruCache, sleep } from "./util.js";
 
 /**
  * Compose a middleware stack (onion model); `final` runs at the centre.
@@ -194,6 +195,51 @@ export function typingIndicator(): Middleware<AnyContext> {
     await ctx.withTyping(async () => {
       await next();
     });
+  };
+}
+
+/** Send a read receipt for the triggering event after the handler finishes. */
+export function autoMarkRead(): Middleware<AnyContext> {
+  return async (ctx, next) => {
+    try {
+      await next();
+    } finally {
+      if (ctx.roomId && ctx.eventId) {
+        await ctx.markRead().catch(() => undefined);
+      }
+    }
+  };
+}
+
+export interface RateLimitBackoffOptions {
+  /** Extra attempts after the first RateLimitedError. Default 1. */
+  maxRetries?: number;
+  /** Cap on honouring retryAfterMs. Default 30_000. */
+  maxRetryAfterMs?: number;
+  onRetry?: (ctx: AnyContext, retryAfterMs: number, attempt: number) => void | Promise<void>;
+}
+
+/**
+ * Soft-retry a handler once (by default) when the homeserver returns
+ * {@link RateLimitedError}. Pair with `BotCreateOptions.onRateLimited` for ops.
+ */
+export function rateLimitBackoff(options: RateLimitBackoffOptions = {}): Middleware<AnyContext> {
+  const maxRetries = Math.max(0, options.maxRetries ?? 1);
+  const maxRetryAfterMs = Math.max(0, options.maxRetryAfterMs ?? 30_000);
+  return async (ctx, next) => {
+    let attempt = 0;
+    for (;;) {
+      try {
+        await next();
+        return;
+      } catch (err) {
+        if (!(err instanceof RateLimitedError) || attempt >= maxRetries) throw err;
+        const wait = Math.min(Math.max(0, err.retryAfterMs), maxRetryAfterMs);
+        attempt += 1;
+        await options.onRetry?.(ctx, wait, attempt);
+        if (wait > 0) await sleep(wait);
+      }
+    }
   };
 }
 

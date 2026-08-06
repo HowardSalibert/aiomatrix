@@ -137,20 +137,58 @@ describe("parseMiniAppContent", () => {
 });
 
 describe("mini app data", () => {
-  it("round-trips a sendData payload", () => {
+  it("round-trips a sendData payload with a human body", () => {
     const content = buildMiniAppDataContent({
-      data: '{"ok":true}',
+      data: '{"action":"submit","items":[1,2]}',
       queryId: "q1",
       appId: "shop",
       messageId: "$card",
     });
     assert.equal(content.msgtype, MINI_APP_DATA_MSGTYPE);
+    assert.equal(content.body, "Submitted: 2 items");
+    assert.equal(content[MINI_APP_DATA_KEY].data, '{"action":"submit","items":[1,2]}');
     assert.equal(content[MINI_APP_DATA_KEY].query_id, "q1");
     const parsed = parseMiniAppDataContent(content);
-    assert.equal(parsed.data, '{"ok":true}');
+    assert.equal(parsed.data, '{"action":"submit","items":[1,2]}');
     assert.equal(parsed.queryId, "q1");
     assert.equal(parsed.appId, "shop");
     assert.equal(parsed.messageId, "$card");
+  });
+
+  it("can hide mini_app_data from stock clients", () => {
+    const content = buildMiniAppDataContent({
+      data: '{"action":"close"}',
+      queryId: null,
+      appId: null,
+      messageId: null,
+      hideFromStockClients: true,
+    });
+    assert.equal(content.body, "\u200b");
+    assert.equal(content[MINI_APP_DATA_KEY].hidden, true);
+    assert.equal(content[MINI_APP_DATA_KEY].data, '{"action":"close"}');
+  });
+
+  it("honours body / formatBody overrides", () => {
+    assert.equal(
+      buildMiniAppDataContent({
+        data: "{}",
+        queryId: null,
+        appId: null,
+        messageId: null,
+        body: "Saved",
+      }).body,
+      "Saved",
+    );
+    assert.equal(
+      buildMiniAppDataContent({
+        data: '{"action":"submit"}',
+        queryId: null,
+        appId: null,
+        messageId: null,
+        formatBody: () => "Custom summary",
+      }).body,
+      "Custom summary",
+    );
   });
 
   it("parseMiniAppJson tolerates non-JSON", () => {

@@ -19,7 +19,22 @@ import {
 import { ContextFactory } from "./context.js";
 import { assertDeviceIdMatch, assertOwnDeviceKeysReady } from "./crypto-guard.js";
 import type { Dispatcher } from "./dispatcher.js";
-import { ConfigurationError, DeviceMismatchError, MiniAppAuthError } from "./errors.js";
+import {
+  ConfigurationError,
+  DeviceMismatchError,
+  MiniAppAuthError,
+  RateLimitedError,
+} from "./errors.js";
+import {
+  AWARE_MESSAGE_DEFAULTS,
+  AWARE_MINI_APP_DEFAULTS,
+  BOT_CAPABILITIES_STATE_EVENT_TYPE,
+  buildBotCapabilitiesContent,
+} from "./bot-capabilities.js";
+import {
+  createFileSharedTokenStores,
+  type FileSharedTokenStores,
+} from "./file-ttl-map.js";
 import {
   CALLBACK_EVENT_TYPE,
   CALLBACK_FALLBACK_COMMAND,
@@ -28,6 +43,7 @@ import {
   InlineKeyboard,
 } from "./keyboards.js";
 import { createDefaultLogger, type Logger, type LogLevel } from "./logger.js";
+import type { Middleware } from "./types.js";
 import {
   buildMiniAppContent,
   parseMiniAppDataContent,
@@ -57,6 +73,7 @@ import type {
   AnyContext,
   BotCreateOptions,
   MatrixEvent,
+  MessageDefaults,
   MiniAppDataContext,
   SendOptions,
 } from "./types.js";
@@ -64,6 +81,8 @@ import { isPlainObject, readJsonSafe, readString, writeJsonAtomic } from "./util
 
 export interface BotHealth {
   running: boolean;
+  /** `running && !stopping && sync fresh && (crypto ok when enabled)`. */
+  ok: boolean;
   cryptoEnabled: boolean;
   cryptoReady: boolean;
   userId: string;
@@ -72,6 +91,8 @@ export interface BotHealth {
   lastSyncAtMs: number;
   /** Ms since the last successful `/sync` (`Infinity` before the first one). */
   syncAgeMs: number;
+  /** True when syncAgeMs exceeds the configured stale threshold. */
+  syncStale: boolean;
   roomsCached: number;
   pendingCallbacks: number;
   pendingMiniAppQueries: number;
@@ -173,6 +194,9 @@ export class Bot {
   private _cryptoReady = false;
   private started = false;
   private stopping = false;
+  private readonly durableStores: FileSharedTokenStores | null;
+  private syncWatchTimer: ReturnType<typeof setInterval> | null = null;
+  private syncStaleNotified = false;
 
   private constructor(params: {
     client: MatrixClient;
@@ -197,13 +221,21 @@ export class Bot {
       this.logger,
     );
     const callbackSecret = params.options.callbackSecret ?? this.miniAppSecret;
+    const pack =
+      params.options.callbackAliasStore &&
+      params.options.callbackBindStore &&
+      params.options.callbackUsedStore &&
+      params.options.miniApp?.queryUsedStore
+        ? null
+        : createFileSharedTokenStores(params.storagePath);
+    this.durableStores = pack;
     this.callbacks =
       params.options.callbacks ??
       new SignedCallbackRegistry({
         secret: callbackSecret,
-        ...(params.options.callbackUsedStore
-          ? { used: params.options.callbackUsedStore }
-          : {}),
+        aliasStore: params.options.callbackAliasStore ?? pack!.callbackAliasStore,
+        bindStore: params.options.callbackBindStore ?? pack!.callbackBindStore,
+        used: params.options.callbackUsedStore ?? pack!.callbackUsedStore,
         ...(params.options.callbackAsyncUsedStore
           ? { asyncUsed: params.options.callbackAsyncUsedStore }
           : {}),
@@ -212,8 +244,8 @@ export class Bot {
       params.options.miniApp?.queries ??
       new SignedMiniAppQueryRegistry({
         secret: this.miniAppSecret,
-        ...(params.options.miniApp?.queryUsedStore
-          ? { used: params.options.miniApp.queryUsedStore }
+        ...(params.options.miniApp?.queryUsedStore || pack
+          ? { used: params.options.miniApp?.queryUsedStore ?? pack!.miniAppQueryUsedStore }
           : {}),
         ...(params.options.miniApp?.asyncQueryUsedStore
           ? { asyncUsed: params.options.miniApp.asyncQueryUsedStore }
@@ -229,22 +261,32 @@ export class Bot {
         );
       }
     }
+    const warnStore = (message: string): void => {
+      this.logger.warn(message);
+      this.options.onStoreWarn?.(message);
+    };
     if (
       this.callbacks instanceof SignedCallbackRegistry &&
-      !params.options.callbackAsyncUsedStore &&
-      !params.options.callbackUsedStore
+      !params.options.callbackAsyncUsedStore
     ) {
-      this.logger.warn(
-        "signed callback tokens use a process-local used-store; multi-instance bots must inject callbackAsyncUsedStore (see examples/redis-stores)",
+      warnStore(
+        "callback used-tokens persist under storagePath (single host); multi-instance bots must inject callbackAsyncUsedStore (see examples/redis-stores)",
+      );
+    }
+    if (
+      this.callbacks instanceof SignedCallbackRegistry &&
+      !params.options.callbackAliasStore
+    ) {
+      warnStore(
+        "short !cb aliases persist under storagePath (single host); multi-instance bots must inject callbackAliasStore",
       );
     }
     if (
       this.miniAppQueries instanceof SignedMiniAppQueryRegistry &&
-      !params.options.miniApp?.asyncQueryUsedStore &&
-      !params.options.miniApp?.queryUsedStore
+      !params.options.miniApp?.asyncQueryUsedStore
     ) {
-      this.logger.warn(
-        "signed MiniApp query tokens use a process-local used-store; multi-instance bots must inject miniApp.asyncQueryUsedStore",
+      warnStore(
+        "MiniApp query used-tokens persist under storagePath (single host); multi-instance bots must inject miniApp.asyncQueryUsedStore",
       );
     }
     if (
@@ -252,7 +294,7 @@ export class Bot {
       params.options.miniApp?.nonceStore == null &&
       params.options.miniApp?.secret
     ) {
-      this.logger.warn(
+      warnStore(
         "MiniApp launch nonces default to process-local memory; multi-instance HTTP must inject miniApp.asyncNonceStore",
       );
     }
@@ -322,10 +364,26 @@ export class Bot {
       storage: dispatcher.storage,
       callbacks: this.callbacks,
       ...(this.options.fsm ? { fsm: this.options.fsm } : {}),
-      ...(this.options.messageDefaults
-        ? { messageDefaults: this.options.messageDefaults }
-        : {}),
+      messageDefaults: this.effectiveMessageDefaults(),
     });
+
+    if (this.options.onRateLimited) {
+      const notify: Middleware = async (_ctx, next) => {
+        try {
+          await next();
+        } catch (err) {
+          if (err instanceof RateLimitedError) {
+            this.options.onRateLimited?.({
+              retryAfterMs: err.retryAfterMs,
+              method: err.method,
+              path: err.path,
+            });
+          }
+          throw err;
+        }
+      };
+      dispatcher.use(notify);
+    }
 
     await this.client.start({
       onRoomEvent: (roomId, event, meta) => {
@@ -345,6 +403,25 @@ export class Bot {
     });
 
     this.started = true;
+    this.syncStaleNotified = false;
+    if (this.options.onSyncStale) {
+      this.syncWatchTimer = setInterval(() => {
+        const health = this.getHealth();
+        if (!health.running) return;
+        if (health.syncStale) {
+          if (!this.syncStaleNotified) {
+            this.syncStaleNotified = true;
+            this.options.onSyncStale?.({
+              syncAgeMs: health.syncAgeMs,
+              lastSyncAtMs: health.lastSyncAtMs,
+            });
+          }
+        } else {
+          this.syncStaleNotified = false;
+        }
+      }, 15_000);
+      this.syncWatchTimer.unref?.();
+    }
     this.logger.info(
       `started as ${this.selfId} (device=${this.getDeviceId() ?? "none"}, crypto=${this.cryptoEnabled}, cryptoReady=${this._cryptoReady})`,
     );
@@ -384,27 +461,73 @@ export class Bot {
   async stop(): Promise<void> {
     if (this.stopping) return;
     this.stopping = true;
+    if (this.syncWatchTimer) {
+      clearInterval(this.syncWatchTimer);
+      this.syncWatchTimer = null;
+    }
     this.scheduler.stop();
     await this.client.stop();
     await this.client.crypto?.close();
+    this.durableStores?.flush();
     this.started = false;
     this.logger.info("stopped");
   }
 
   getHealth(): BotHealth {
     const lastSyncAtMs = this.client.lastSyncAt;
+    const syncAgeMs = lastSyncAtMs > 0 ? Date.now() - lastSyncAtMs : Number.POSITIVE_INFINITY;
+    const staleMs = this.options.healthSyncStaleMs ?? 120_000;
+    const syncStale = syncAgeMs > staleMs;
+    const cryptoOk = !this.cryptoEnabled || this._cryptoReady;
+    const ok = this.started && !this.stopping && !syncStale && cryptoOk;
     return {
       running: this.started,
+      ok,
       cryptoEnabled: this.cryptoEnabled,
       cryptoReady: this._cryptoReady,
       userId: this.selfId,
       deviceId: this.getDeviceId(),
       lastSyncAtMs,
-      syncAgeMs: lastSyncAtMs > 0 ? Date.now() - lastSyncAtMs : Number.POSITIVE_INFINITY,
+      syncAgeMs,
+      syncStale,
       roomsCached: this.client.rooms.size,
       pendingCallbacks: this.callbacks.size,
       pendingMiniAppQueries: this.miniAppQueries.size,
       scheduledJobs: this.scheduler.size,
+    };
+  }
+
+  /**
+   * Effective send defaults. `parseMode: "markdown"` is on unless overridden.
+   * `clientProfile: "aware"` applies {@link AWARE_MESSAGE_DEFAULTS}.
+   */
+  effectiveMessageDefaults(): MessageDefaults {
+    const aware =
+      this.options.clientProfile === "aware" ? AWARE_MESSAGE_DEFAULTS : null;
+    return {
+      parseMode: "markdown",
+      ...aware,
+      ...this.options.messageDefaults,
+    };
+  }
+
+  /** MiniApp card defaults after `clientProfile` / explicit `miniApp.*`. */
+  effectiveMiniAppDefaults(): Partial<MiniAppCardOptions> {
+    const aware =
+      this.options.clientProfile === "aware" ? { ...AWARE_MINI_APP_DEFAULTS } : {};
+    const configured = this.options.miniApp ?? {};
+    return {
+      ...aware,
+      ...(configured.includePlainLink !== undefined
+        ? { includePlainLink: configured.includePlainLink }
+        : {}),
+      ...(configured.includeLaunchKeyboard !== undefined
+        ? { includeLaunchKeyboard: configured.includeLaunchKeyboard }
+        : {}),
+      ...(configured.includeKeyboardFallback !== undefined
+        ? { includeKeyboardFallback: configured.includeKeyboardFallback }
+        : {}),
+      ...(configured.topLevelUrl !== undefined ? { topLevelUrl: configured.topLevelUrl } : {}),
     };
   }
 
@@ -601,7 +724,7 @@ export class Bot {
     return sendMessageWithOptions(
       { client: this.client, roomId, callbacks: this.callbacks },
       { text },
-      options,
+      { ...this.effectiveMessageDefaults(), ...options },
     );
   }
 
@@ -610,7 +733,7 @@ export class Bot {
     return sendMessageWithOptions(
       { client: this.client, roomId, callbacks: this.callbacks },
       { html },
-      options,
+      { ...this.effectiveMessageDefaults(), ...options },
     );
   }
 
@@ -634,11 +757,37 @@ export class Bot {
    * slash-autocomplete without hard-coding anything.
    */
   async advertiseCommands(roomId: string): Promise<string> {
-    return this.client.sendStateEvent(
+    const eventId = await this.client.sendStateEvent(
       roomId,
       COMMANDS_STATE_EVENT_TYPE,
       this.selfId,
       buildCommandsStateContent(this.commands.list()),
+    );
+    if (this.options.advertiseCapabilities === true) {
+      await this.advertiseCapabilities(roomId).catch((err) => {
+        this.logger.warn(`advertiseCapabilities failed in ${roomId}`, err);
+      });
+    }
+    return eventId;
+  }
+
+  /** Publish `dev.aiomatrix.bot` so aware hosts can detect keyboard/MiniApp contract. */
+  async advertiseCapabilities(roomId: string): Promise<string> {
+    const defaults = this.effectiveMessageDefaults();
+    const mini = this.effectiveMiniAppDefaults();
+    return this.client.sendStateEvent(
+      roomId,
+      BOT_CAPABILITIES_STATE_EVENT_TYPE,
+      this.selfId,
+      buildBotCapabilitiesContent({
+        clientProfile: this.options.clientProfile ?? "stock",
+        keyboardFallback: defaults.keyboardFallback,
+        parseMode: defaults.parseMode,
+        topLevelUrl: mini.topLevelUrl,
+        includePlainLink: mini.includePlainLink,
+        includeLaunchKeyboard: mini.includeLaunchKeyboard,
+        includeKeyboardFallback: mini.includeKeyboardFallback,
+      }) as unknown as Record<string, unknown>,
     );
   }
 
@@ -749,12 +898,8 @@ export class Bot {
         ...(options.appId ? { appId: options.appId } : {}),
       }).url;
     }
-    const defaults = this.options.miniApp;
     const content = buildMiniAppContent({
-      includePlainLink: defaults?.includePlainLink,
-      includeLaunchKeyboard: defaults?.includeLaunchKeyboard,
-      includeKeyboardFallback: defaults?.includeKeyboardFallback,
-      topLevelUrl: defaults?.topLevelUrl,
+      ...this.effectiveMiniAppDefaults(),
       ...options,
       url: launchUrl,
       botId: options.botId ?? this.selfId,
@@ -788,7 +933,7 @@ export class Bot {
           callbackUserId: record.userId,
         },
         options?.html ? { html: options.html } : { text },
-        options,
+        { ...this.effectiveMessageDefaults(), ...options },
       );
     } catch (err) {
       // Let the mini app retry rather than burning the query on a transient error.

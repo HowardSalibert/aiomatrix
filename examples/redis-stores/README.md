@@ -10,32 +10,33 @@ npm install redis
 ```ts
 import { createClient } from "redis";
 import { Bot } from "aiomatrix";
-import { RedisAsyncNonceStore, RedisAsyncUsedTokenStore } from "./stores.js";
+import { createRedisSharedTokenStores } from "./stores.js";
 
 const redis = createClient({ url: process.env.REDIS_URL });
 await redis.connect();
 
-const asyncNonceStore = new RedisAsyncNonceStore(redis);
-const queryUsed = new RedisAsyncUsedTokenStore(redis, { prefix: "aio:mq:" });
-const callbackUsed = new RedisAsyncUsedTokenStore(redis, { prefix: "aio:cb:" });
+const stores = createRedisSharedTokenStores(redis);
 
 const bot = await Bot.create({
   homeserverUrl: process.env.MATRIX_HS_URL!,
   accessToken: process.env.MATRIX_ACCESS_TOKEN!,
+  clientProfile: "aware",
   miniApp: {
     secret: process.env.MINIAPP_SECRET!,
-    asyncQueryUsedStore: queryUsed,
-    asyncNonceStore,
+    asyncQueryUsedStore: stores.miniAppAsyncQueryUsedStore,
+    asyncNonceStore: stores.asyncNonceStore,
   },
-  callbackAsyncUsedStore: callbackUsed,
+  callbackAsyncUsedStore: stores.callbackAsyncUsedStore,
+  callbackAliasStore: stores.callbackAliasStore,
+  callbackBindStore: stores.callbackBindStore,
 });
 
 // Only the syncing process calls bot.run().
-// HTTP workers can share createMiniAppServer({ asyncNonceStore }).
-const server = bot.createMiniAppServer({ asyncNonceStore });
+const server = bot.createMiniAppServer({ asyncNonceStore: stores.asyncNonceStore });
 ```
+
+Single-host bots can use `createFileSharedTokenStores(storagePath)` from `aiomatrix`
+(already the default under `Bot.create`).
 
 `/auth` uses `authenticateAsync` when `asyncNonceStore` or `resolveRoomAuth` is set.
 Callback / query claim uses awaited Redis `SET NX` via `resolveAsync` / `claimAsync`.
-
-Without Redis, defaults stay in-memory and single-process.

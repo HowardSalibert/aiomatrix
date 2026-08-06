@@ -6,6 +6,10 @@ import {
   renderKeyboardFallback,
 } from "../keyboards.js";
 import { escapeHtml, isPlainObject, readString } from "../util.js";
+import {
+  formatMiniAppDataPreview,
+  type MiniAppDataHumanizer,
+} from "./payloads.js";
 
 /** Canonical content field describing a MiniApp launch card. */
 export const MINI_APP_CONTENT_KEY = "dev.aiomatrix.mini_app";
@@ -16,6 +20,8 @@ export const MINI_APP_DATA_MSGTYPE = "dev.aiomatrix.mini_app_data";
 /** Content field / to-device event type for mini app → bot data. */
 export const MINI_APP_DATA_KEY = "dev.aiomatrix.mini_app_data";
 export const MINI_APP_SCHEMA_VERSION = 1;
+/** Body placeholder when {@link buildMiniAppDataContent} hides from stock clients. */
+export const MINI_APP_DATA_HIDDEN_BODY = "\u200b";
 
 export interface MiniAppCardOptions {
   /** URL of the mini app. Must be https (or http on localhost). */
@@ -249,17 +255,65 @@ export interface MiniAppDataPayload {
   messageId: string | null;
 }
 
-/** Build the content a client sends when a mini app calls `sendData`. */
-export function buildMiniAppDataContent(payload: MiniAppDataPayload): Record<string, unknown> {
+export interface MiniAppDataContentOptions extends MiniAppDataPayload {
+  /**
+   * Explicit human body. Takes precedence over {@link summary} / {@link formatBody}.
+   * Raw JSON must stay in {@link MINI_APP_DATA_KEY}.data — never put it here by default.
+   */
+  body?: string;
+  /** Alias for {@link body}. */
+  summary?: string;
+  /** Build a human body from raw + parsed JSON. */
+  formatBody?: MiniAppDataHumanizer;
+  /**
+   * Use a zero-width body so Element / Schildi do not surface the event as
+   * ordinary chat text. Aware clients still read {@link MINI_APP_DATA_KEY}.
+   * Default false.
+   */
+  hideFromStockClients?: boolean;
+  /**
+   * Override msgtype (default {@link MINI_APP_DATA_MSGTYPE}). Useful when a
+   * host wants a private / ignored type for stock clients.
+   */
+  msgtype?: string;
+}
+
+/**
+ * Build the content a client sends when a mini app calls `sendData`.
+ *
+ * `dev.aiomatrix.mini_app_data.data` always holds the raw string; `body` is a
+ * short human summary unless {@link MiniAppDataContentOptions.hideFromStockClients}
+ * is set.
+ */
+export function buildMiniAppDataContent(
+  payload: MiniAppDataPayload | MiniAppDataContentOptions,
+): Record<string, unknown> {
+  const opts = payload as MiniAppDataContentOptions;
+  const hide = opts.hideFromStockClients === true;
+  let body: string;
+  if (hide) {
+    body = MINI_APP_DATA_HIDDEN_BODY;
+  } else if (opts.body != null) {
+    body = opts.body;
+  } else if (opts.summary != null) {
+    body = opts.summary;
+  } else if (opts.formatBody) {
+    const parsed = parseMiniAppJson(opts.data);
+    body = opts.formatBody(opts.data, parsed) ?? formatMiniAppDataPreview(opts.data);
+  } else {
+    body = formatMiniAppDataPreview(opts.data);
+  }
+
   return {
-    msgtype: MINI_APP_DATA_MSGTYPE,
-    body: payload.data,
+    msgtype: opts.msgtype ?? MINI_APP_DATA_MSGTYPE,
+    body,
     [MINI_APP_DATA_KEY]: {
       version: MINI_APP_SCHEMA_VERSION,
-      data: payload.data,
-      ...(payload.queryId ? { query_id: payload.queryId } : {}),
-      ...(payload.appId ? { app_id: payload.appId } : {}),
-      ...(payload.messageId ? { message_id: payload.messageId } : {}),
+      data: opts.data,
+      ...(opts.queryId ? { query_id: opts.queryId } : {}),
+      ...(opts.appId ? { app_id: opts.appId } : {}),
+      ...(opts.messageId ? { message_id: opts.messageId } : {}),
+      ...(hide ? { hidden: true } : {}),
     },
   };
 }

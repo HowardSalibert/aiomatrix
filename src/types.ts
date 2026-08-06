@@ -7,7 +7,7 @@ import type { Logger } from "./logger.js";
 import type { AsyncNonceStore, NonceStore } from "./miniapp/initdata.js";
 import type { MiniAppQueryStore } from "./miniapp/query.js";
 import type { Membership, PowerLevels } from "./room-cache.js";
-import type { AsyncUsedTokenStore, UsedTokenStore } from "./token-store.js";
+import type { AsyncUsedTokenStore, TtlStringMap, UsedTokenStore } from "./token-store.js";
 
 /** Any Matrix event as delivered by `/sync` (subset that is always present). */
 export interface MatrixEvent {
@@ -76,9 +76,14 @@ export interface SendOptions {
   keyboardFallback?: boolean;
   /**
    * How to interpret `text` when building `formatted_body`.
-   * - `plain` (default): escape only
-   * - `markdown`: lightweight `**bold**`, `_italic_`, `` `code` ``, `[label](url)`
+   * - `plain`: no formatted_body from text (unless a keyboard forces HTML fallback)
+   * - `markdown`: lightweight `**bold**`, `_italic_`, `` `code` ``, `[label](url)` —
+   *   only sets `formatted_body` when markup is present
    * - `html`: treat `text` as already-safe HTML (prefer `answerHtml` / `html` source)
+   *
+   * Bot replies default to `"markdown"` via {@link MessageDefaults} /
+   * `Bot.effectiveMessageDefaults()`. Direct `buildMessageContent` / `sendMessageWithOptions`
+   * without options still default to `"plain"`.
    */
   parseMode?: ParseMode;
   /** Mark specific users / the room as intentionally mentioned (`m.mentions`). */
@@ -92,8 +97,15 @@ export interface SendOptions {
 /** Bot-wide defaults for {@link SendOptions}. */
 export interface MessageDefaults {
   keyboardFallback?: boolean;
+  /**
+   * Default parse mode for `answer` / `reply` / `answerMiniAppQuery`.
+   * Bot.start applies `parseMode: "markdown"` unless you override this.
+   */
   parseMode?: ParseMode;
 }
+
+/** Preset for stock Element vs aware Matrix hosts. */
+export type ClientProfile = "stock" | "aware";
 
 /** Common surface of every context object. */
 export interface BaseContext<T extends UpdateType = UpdateType> {
@@ -252,8 +264,14 @@ export interface MiniAppDataContext extends BaseContext<"mini_app_data"> {
   readonly queryId: string | null;
   /** Mini app that produced the data. */
   readonly appId: string | null;
-  /** Reply to the mini app query with a message. */
+  /**
+   * Reply into the room and claim the launch query (when `queryId` is set).
+   * Prefer {@link answerMiniAppQuery}; this Telegram-named alias stays for
+   * ported apps.
+   */
   answerWebAppQuery(text: string, options?: SendOptions): Promise<string>;
+  /** Same as {@link answerWebAppQuery} — preferred Matrix name. */
+  answerMiniAppQuery(text: string, options?: SendOptions): Promise<string>;
 }
 
 export interface PollResponseContext extends BaseContext<"poll_response"> {
@@ -494,8 +512,24 @@ export interface BotCreateOptions {
   handlerTimeoutMs?: number;
   /** MiniApp platform configuration. */
   miniApp?: MiniAppOptions;
-  /** Defaults for `answer` / `reply` / `sendMessageWithOptions`. */
+  /** Defaults for `answer` / `reply` / MiniApp answers. Markdown is on by default. */
   messageDefaults?: MessageDefaults;
+  /**
+   * Host profile preset. `"aware"` turns off keyboard plaintext dumps and lean
+   * MiniApp cards (see `AWARE_MESSAGE_DEFAULTS` / `AWARE_MINI_APP_DEFAULTS`).
+   * Explicit `messageDefaults` / `miniApp.*` still win.
+   */
+  clientProfile?: ClientProfile;
+  /**
+   * Sync age above which {@link BotHealth.ok} is false. Default 120_000 ms.
+   */
+  healthSyncStaleMs?: number;
+  /**
+   * Publish `dev.aiomatrix.bot` state into rooms (via {@link Bot.advertiseCapabilities}).
+   * Default false — call advertiseCapabilities explicitly or set true to auto-advertise
+   * into rooms where commands are advertised.
+   */
+  advertiseCapabilities?: boolean;
   /**
    * Callback token registry. Default: HMAC-signed tokens using `callbackSecret`
    * or the MiniApp secret. Pass `new CallbackRegistry()` for process-local opaque tokens.
@@ -510,6 +544,16 @@ export interface BotCreateOptions {
    * When set, callback resolution prefers `resolveAsync`.
    */
   callbackAsyncUsedStore?: AsyncUsedTokenStore;
+  /**
+   * Short `!cb` alias → signed token map. Default: file under `storagePath`.
+   * Share across instances (Redis) for multi-host bots.
+   */
+  callbackAliasStore?: TtlStringMap;
+  /**
+   * Durable `token → messageEventId` binds for `answerCallback({ editText })`
+   * after restart. Default: file under `storagePath`.
+   */
+  callbackBindStore?: TtlStringMap;
   /**
    * When a persisted session's access token is rejected (startup or mid-run),
    * password-login again reusing `device.json` / the previous device id.
@@ -532,6 +576,16 @@ export interface BotCreateOptions {
   fsm?: { strategy?: FsmStrategy; namespace?: string; ttlMs?: number };
   /** Called when syncing dies unrecoverably (invalid token, revoked device). */
   onFatal?: (error: unknown) => void;
+  /** Called when sync age exceeds `healthSyncStaleMs` while the bot is running. */
+  onSyncStale?: (health: { syncAgeMs: number; lastSyncAtMs: number }) => void;
+  /** Called when a handler/send path surfaces {@link import("./errors.js").RateLimitedError}. */
+  onRateLimited?: (error: {
+    retryAfterMs: number;
+    method?: string;
+    path?: string;
+  }) => void;
+  /** Called when process-local / multi-instance store warnings are emitted. */
+  onStoreWarn?: (message: string) => void;
   /** Injected fetch implementation (tests, proxies, custom agents). */
   fetchImpl?: typeof fetch;
   /** Observability hook for every HTTP attempt. */

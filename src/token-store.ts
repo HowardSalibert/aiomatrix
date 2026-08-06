@@ -83,6 +83,65 @@ export class MemoryUsedTokenStore implements UsedTokenStore {
   }
 }
 
+/**
+ * String map with TTL — used for short `!cb` aliases and optional message binds
+ * so stock-client fallbacks survive restarts / multi-instance (share via Redis).
+ */
+export interface TtlStringMap {
+  get(key: string): string | undefined;
+  set(key: string, value: string, ttlMs: number): void;
+  delete(key: string): void;
+}
+
+/** Bounded in-memory {@link TtlStringMap}. */
+export class MemoryTtlStringMap implements TtlStringMap {
+  private readonly entries = new Map<string, { value: string; expiresAt: number }>();
+
+  constructor(
+    private readonly capacity = 16_384,
+    private readonly defaultTtlMs = 24 * 60 * 60 * 1000,
+  ) {}
+
+  get(key: string): string | undefined {
+    const entry = this.entries.get(key);
+    if (!entry) return undefined;
+    if (entry.expiresAt <= Date.now()) {
+      this.entries.delete(key);
+      return undefined;
+    }
+    return entry.value;
+  }
+
+  set(key: string, value: string, ttlMs?: number): void {
+    const now = Date.now();
+    this.prune(now);
+    while (this.entries.size >= this.capacity) {
+      const oldest = this.entries.keys().next();
+      if (oldest.done) break;
+      this.entries.delete(oldest.value);
+    }
+    this.entries.set(key, { value, expiresAt: now + (ttlMs ?? this.defaultTtlMs) });
+  }
+
+  delete(key: string): void {
+    this.entries.delete(key);
+  }
+
+  get size(): number {
+    return this.entries.size;
+  }
+
+  clear(): void {
+    this.entries.clear();
+  }
+
+  private prune(now: number): void {
+    for (const [key, entry] of this.entries) {
+      if (entry.expiresAt <= now) this.entries.delete(key);
+    }
+  }
+}
+
 /** Process-local {@link AsyncUsedTokenStore} backed by {@link MemoryUsedTokenStore}. */
 export class MemoryAsyncUsedTokenStore implements AsyncUsedTokenStore {
   private readonly inner: MemoryUsedTokenStore;

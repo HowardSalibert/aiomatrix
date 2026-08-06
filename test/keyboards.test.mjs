@@ -228,6 +228,16 @@ describe("keyboard tokenisation on send", () => {
     assert.match(content.formatted_body, /<strong>hi<\/strong>/);
     assert.equal(content.body, "**hi**");
   });
+
+  it("skips formatted_body for plain strings even in markdown mode", () => {
+    const { content } = buildMessageContent(
+      { text: "ok" },
+      { parseMode: "markdown" },
+      target(new CallbackRegistry()),
+    );
+    assert.equal(content.formatted_body, undefined);
+    assert.equal(content.body, "ok");
+  });
 });
 
 describe("CallbackRegistry", () => {

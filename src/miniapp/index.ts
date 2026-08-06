@@ -16,6 +16,7 @@ export type {
 
 export {
   MINI_APP_CONTENT_KEY,
+  MINI_APP_DATA_HIDDEN_BODY,
   MINI_APP_DATA_KEY,
   MINI_APP_DATA_MSGTYPE,
   MINI_APP_MSGTYPE_STUDNOVSU,
@@ -27,7 +28,40 @@ export {
   parseMiniAppDataContent,
   parseMiniAppJson,
 } from "./events.js";
-export type { MiniAppCard, MiniAppCardOptions, MiniAppDataPayload } from "./events.js";
+export type {
+  MiniAppCard,
+  MiniAppCardOptions,
+  MiniAppDataContentOptions,
+  MiniAppDataPayload,
+} from "./events.js";
+
+export {
+  MINI_APP_KNOWN_ACTIONS,
+  formatMiniAppDataPreview,
+  parseMiniAppPayload,
+} from "./payloads.js";
+export type {
+  MiniAppCancelPayload,
+  MiniAppClosePayload,
+  MiniAppDataHumanizer,
+  MiniAppKnownAction,
+  MiniAppPayloadBase,
+  MiniAppPublishPayload,
+  MiniAppRsvpPayload,
+  MiniAppSelectPayload,
+  MiniAppSharePayload,
+  MiniAppSubmitPayload,
+  MiniAppTypedPayload,
+} from "./payloads.js";
+
+export {
+  formatMessagePreview,
+  classifyAiomatrixContent,
+  normalizeAiomatrixContent,
+  stripKeyboardFallbackHtml,
+  stripKeyboardFallbackText,
+} from "./preview.js";
+export type { AiomatrixContentKind, NormalizedAiomatrixContent } from "./preview.js";
 
 export {
   DEFAULT_INIT_DATA_TTL_SECONDS,
