@@ -67,8 +67,8 @@ export interface SendOptions {
   replyTo?: string | boolean;
   /** Send into a thread (`m.thread`). Pass `true` to use the current thread root. */
   thread?: string | boolean;
-  /** Attach an inline keyboard. */
-  keyboard?: InlineKeyboard;
+  /** Attach an inline keyboard. Pass `null` on edit to revoke/clear. */
+  keyboard?: InlineKeyboard | null;
   /**
    * Append plain-text / HTML keyboard fallback (`!cb …`, `<ol>`) for stock clients.
    * Default true. Aware clients that render `dev.aiomatrix.keyboard` should set

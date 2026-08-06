@@ -1124,7 +1124,11 @@ export class MatrixClient {
     for (const [roomId, invite] of invites) {
       const events = (invite.invite_state?.events ?? []) as MatrixEvent[];
       for (const event of events) this.rooms.applyStateEvent(roomId, event);
-      this.handlers.onInvite?.(roomId, events);
+      // COLD_START_DISPATCH.invite = after_bootstrap — do not dispatch invites
+      // during the first sync, but still allow autojoin.
+      if (!meta.isBootstrap) {
+        this.handlers.onInvite?.(roomId, events);
+      }
       if (this.autojoin && this.shouldAutojoin(roomId, events)) {
         try {
           await this.joinRoom(roomId);

@@ -3,8 +3,11 @@
  *
  *   cp -r examples/template my-bot && cd my-bot
  *   npm install aiomatrix
- *   cp .env.example .env  # fill MATRIX_* 
- *   npx tsx src/main.ts
+ *   cp .env.example .env  # fill MATRIX_*
+ *   npx tsx --env-file=.env src/main.ts
+ *
+ * In-repo development against a local build can use:
+ *   import { … } from "../../dist/index.js";
  */
 import {
   Bot,
@@ -16,7 +19,7 @@ import {
   rateLimitBackoff,
   roomThrottle,
   userFacingErrors,
-} from "../../dist/index.js";
+} from "aiomatrix";
 
 const bot = await Bot.create({
   homeserverUrl: process.env.MATRIX_HS_URL ?? process.env.MATRIX_HOMESERVER_URL!,
@@ -25,6 +28,7 @@ const bot = await Bot.create({
   userId: process.env.MATRIX_USER_ID,
   clientProfile: "aware",
   storagePath: process.env.MATRIX_STORAGE ?? "./data",
+  outbox: true,
 });
 
 const dp = new Dispatcher();

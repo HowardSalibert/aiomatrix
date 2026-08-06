@@ -8,6 +8,8 @@ export interface OutboxEntry {
   eventType: string;
   content: Record<string, unknown>;
   txnId?: string;
+  /** When set, flush via state PUT instead of timeline send. */
+  stateKey?: string;
   createdAtMs: number;
   attempts: number;
   lastError?: string;
@@ -80,6 +82,7 @@ export interface OutboxOptions {
     eventType: string,
     content: Record<string, unknown>,
     txnId?: string,
+    stateKey?: string,
   ) => Promise<string>;
   /** Max attempts before dropping. Default 8. */
   maxAttempts?: number;
@@ -99,7 +102,13 @@ export async function flushOutbox(options: OutboxOptions): Promise<{ sent: numbe
       continue;
     }
     try {
-      await options.send(entry.roomId, entry.eventType, entry.content, entry.txnId);
+      await options.send(
+        entry.roomId,
+        entry.eventType,
+        entry.content,
+        entry.txnId,
+        entry.stateKey,
+      );
       await options.store.remove(entry.id);
       sent += 1;
     } catch (err) {

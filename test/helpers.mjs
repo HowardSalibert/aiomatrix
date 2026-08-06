@@ -23,6 +23,7 @@ export class FakeClient {
     this.directRoomIds = new Set(options.directRoomIds ?? []);
     this.nextEventId = 0;
     this.attachmentBytes = options.attachmentBytes ?? new Uint8Array([1, 2, 3]);
+    this.eventsById = new Map(options.eventsById ?? []);
   }
 
   #eventId() {
@@ -33,6 +34,13 @@ export class FakeClient {
   async sendEvent(roomId, type, content) {
     const eventId = this.#eventId();
     this.sent.push({ roomId, type, content, eventId });
+    this.eventsById.set(eventId, {
+      event_id: eventId,
+      room_id: roomId,
+      type,
+      sender: this.selfId,
+      content,
+    });
     return eventId;
   }
 
@@ -107,12 +115,21 @@ export class FakeClient {
   }
 
   async getEvent(roomId, eventId) {
+    const stored = this.eventsById.get(eventId);
+    if (stored) return { ...stored, room_id: roomId };
     return {
       event_id: eventId,
       room_id: roomId,
       type: "m.room.message",
       sender: "@peer:example.org",
       content: { msgtype: "m.text", body: "quoted" },
+    };
+  }
+
+  async uploadContent(data, options = {}) {
+    return {
+      upload: { contentUri: "mxc://example.org/uploaded" },
+      file: options.encryptForRoom ? { url: "mxc://example.org/enc", key: {} } : null,
     };
   }
 
@@ -152,12 +169,44 @@ export class FakeBot {
     this.isStopping = false;
     this.logger = createDefaultLogger("silent");
     this._hostCaps = new Map();
+    this._outbox = options.outbox ?? null;
+    this._metrics = [];
+  }
+
+  get outboxStore() {
+    return this._outbox;
+  }
+
+  noteMetric(metric) {
+    this._metrics.push(metric);
+  }
+
+  capabilityForRoom(roomId) {
+    const host = this.getHostCapabilities(roomId);
+    const hostAware =
+      host.profile === "aware" ||
+      host.keyboardNative ||
+      host.toast ||
+      host.progress ||
+      host.pollUi ||
+      host.miniApp;
+    if (this.clientProfile === "aware") return "aware";
+    if (this.clientProfile === "hybrid") return hostAware ? "aware" : "stock";
+    return "stock";
+  }
+
+  effectiveMessageDefaults(roomId) {
+    const level = roomId !== undefined ? this.capabilityForRoom(roomId) : this.clientProfile;
+    return {
+      parseMode: "markdown",
+      ...(level === "aware" ? { keyboardFallback: false } : {}),
+    };
   }
 
   getHostCapabilities(roomId) {
     return (
       this._hostCaps.get(roomId) ?? {
-        profile: this.clientProfile,
+        profile: this.clientProfile === "hybrid" ? "stock" : this.clientProfile,
         features: new Set(),
         keyboardNative: this.clientProfile === "aware",
         toast: this.clientProfile === "aware",

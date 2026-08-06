@@ -9,7 +9,7 @@ import {
 } from "./keyboards.js";
 import type { ParseMode, SendOptions } from "./types.js";
 import { createHash } from "node:crypto";
-import { escapeHtml } from "./util.js";
+import { escapeHtml, isPlainObject } from "./util.js";
 import { finalizeAiomatrixContent } from "./content-validate.js";
 import type { OutboxStore } from "./outbox.js";
 import { RateLimitedError, RequestTimeoutError } from "./errors.js";
@@ -223,20 +223,35 @@ export async function sendMessageWithOptions(
 ): Promise<string> {
   const { content, tokens } = buildMessageContent(source, options, target);
   const txnId = resolveTxnId(options);
+  const eventId = await sendEventWithOutbox(target, "m.room.message", content, txnId);
+  if (tokens.length > 0) target.callbacks?.bindMessage(tokens, eventId);
+  return eventId;
+}
+
+/**
+ * Send any room event; on transient failure enqueue to {@link SendTarget.outbox}
+ * when configured, then rethrow. Validates `dev.aiomatrix.*` schema versions.
+ */
+export async function sendEventWithOutbox(
+  target: SendTarget,
+  eventType: string,
+  content: Record<string, unknown>,
+  txnId?: string,
+): Promise<string> {
+  const validated = finalizeAiomatrixContent(content, { eventType });
+  if (validated.warnings.length > 0) target.onContentWarn?.(validated.warnings);
   try {
-    const eventId = await target.client.sendEvent(
+    return await target.client.sendEvent(
       target.roomId,
-      "m.room.message",
+      eventType,
       content,
       txnId ? { txnId } : undefined,
     );
-    if (tokens.length > 0) target.callbacks?.bindMessage(tokens, eventId);
-    return eventId;
   } catch (err) {
     if (target.outbox && isTransientSendError(err)) {
       await target.outbox.enqueue({
         roomId: target.roomId,
-        eventType: "m.room.message",
+        eventType,
         content,
         ...(txnId ? { txnId } : {}),
       });
@@ -245,7 +260,34 @@ export async function sendMessageWithOptions(
   }
 }
 
-function isTransientSendError(err: unknown): boolean {
+/**
+ * Send a state event; enqueue to outbox on transient failure when configured.
+ * Outbox flush uses `sendEvent` — state retries may need a manual re-advertise.
+ */
+export async function sendStateWithOutbox(
+  target: SendTarget,
+  eventType: string,
+  stateKey: string,
+  content: Record<string, unknown>,
+): Promise<string> {
+  const validated = finalizeAiomatrixContent(content, { eventType });
+  if (validated.warnings.length > 0) target.onContentWarn?.(validated.warnings);
+  try {
+    return await target.client.sendStateEvent(target.roomId, eventType, stateKey, content);
+  } catch (err) {
+    if (target.outbox && isTransientSendError(err)) {
+      await target.outbox.enqueue({
+        roomId: target.roomId,
+        eventType,
+        content,
+        stateKey,
+      });
+    }
+    throw err;
+  }
+}
+
+export function isTransientSendError(err: unknown): boolean {
   if (err instanceof RateLimitedError) return true;
   if (err instanceof RequestTimeoutError) return true;
   if (err instanceof MatrixApiError) {
@@ -261,7 +303,8 @@ function isTransientSendError(err: unknown): boolean {
 /**
  * Edit a previously sent message, optionally replacing the inline keyboard.
  * Revokes tokens for the original event when a new keyboard is attached or
- * `keyboard: null` is passed.
+ * `keyboard: null` is passed. When `keyboard` is omitted, the previous
+ * `dev.aiomatrix.keyboard` is preserved (fetched from the homeserver).
  */
 export async function editMessageWithOptions(
   target: SendTarget,
@@ -292,6 +335,8 @@ export async function editMessageWithOptions(
         formatted = `${base}${fallback.html}`;
       }
     }
+  } else if (opts.keyboard === undefined) {
+    keyboardContent = await readExistingKeyboard(target, eventId);
   }
 
   const newContent: Record<string, unknown> = {
@@ -305,9 +350,12 @@ export async function editMessageWithOptions(
   if (keyboardContent) newContent[KEYBOARD_CONTENT_KEY] = keyboardContent;
   if (opts.extra) Object.assign(newContent, opts.extra);
 
+  const validated = finalizeAiomatrixContent(newContent);
+  if (validated.warnings.length > 0) target.onContentWarn?.(validated.warnings);
+
   const txnId = resolveTxnId(opts);
-  const replacementId = await target.client.sendEvent(
-    target.roomId,
+  const replacementId = await sendEventWithOutbox(
+    target,
     "m.room.message",
     {
       ...newContent,
@@ -321,8 +369,54 @@ export async function editMessageWithOptions(
       "m.new_content": newContent,
       "m.relates_to": { rel_type: "m.replace", event_id: eventId },
     },
-    txnId ? { txnId } : undefined,
+    txnId,
   );
   if (minted.length > 0) target.callbacks?.bindMessage(minted, eventId);
   return replacementId;
+}
+
+async function readExistingKeyboard(
+  target: SendTarget,
+  eventId: string,
+): Promise<KeyboardContent | undefined> {
+  const content = await readExistingEffectiveContent(target, eventId);
+  if (!content) return undefined;
+  const kb = content[KEYBOARD_CONTENT_KEY];
+  if (isPlainObject(kb) && Array.isArray(kb.inline)) {
+    return kb as unknown as KeyboardContent;
+  }
+  return undefined;
+}
+
+/** Effective message content (follows `m.new_content` for edits). */
+export async function readExistingEffectiveContent(
+  target: SendTarget,
+  eventId: string,
+): Promise<Record<string, unknown> | null> {
+  try {
+    const event = await target.client.getEvent(target.roomId, eventId);
+    let content = isPlainObject(event.content) ? event.content : null;
+    if (content && isPlainObject(content["m.new_content"])) {
+      content = content["m.new_content"] as Record<string, unknown>;
+    }
+    return content;
+  } catch {
+    return null;
+  }
+}
+
+/** Plain/HTML source for an existing message (keyboard-only edits). */
+export async function readExistingMessageSource(
+  target: SendTarget,
+  eventId: string,
+): Promise<MessageSource> {
+  const content = await readExistingEffectiveContent(target, eventId);
+  if (!content) return { text: "" };
+  const html =
+    content.format === "org.matrix.custom.html" && typeof content.formatted_body === "string"
+      ? content.formatted_body
+      : undefined;
+  const text = typeof content.body === "string" ? content.body : "";
+  if (html !== undefined) return { html, text };
+  return { text };
 }

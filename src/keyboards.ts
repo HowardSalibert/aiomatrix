@@ -286,12 +286,19 @@ export class InlineKeyboard {
 }
 
 /** Parse a keyboard out of event content, or `null`. */
-export function parseKeyboardContent(content: unknown): KeyboardContent | null {
+export function parseKeyboardContent(
+  content: unknown,
+  options?: { onWarn?: (warnings: string[]) => void },
+): KeyboardContent | null {
   if (!isPlainObject(content)) return null;
   const raw = content[KEYBOARD_CONTENT_KEY];
   if (!isPlainObject(raw) || !Array.isArray(raw.inline)) return null;
-  // Best-effort parse even when version is newer than we know.
-  checkSchemaVersion("keyboard", readSchemaVersion(raw));
+  const versionInfo = checkSchemaVersion("keyboard", readSchemaVersion(raw));
+  if (!versionInfo.supported) {
+    options?.onWarn?.([
+      `keyboard version ${versionInfo.version} newer than library support`,
+    ]);
+  }
   const inline: InlineButton[][] = [];
   for (const row of raw.inline) {
     if (!Array.isArray(row)) continue;

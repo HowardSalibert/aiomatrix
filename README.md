@@ -15,6 +15,13 @@ npm install @matrix-org/matrix-sdk-crypto-nodejs
 
 Node >= 24, ESM only.
 
+## 0.8
+
+- Outbox, hybrid `clientProfile`, schema contract, plugins, CLI (`doctor` / `migrate` / `create`)
+- Docs: [CHANGELOG](./CHANGELOG.md), [PUBLIC_API.md](./PUBLIC_API.md), [AWARE_HOST.md](./AWARE_HOST.md), [COMPAT.md](./COMPAT.md), [SCENES.md](./SCENES.md)
+- Adapters: `aiomatrix/redis`, `aiomatrix/otel` (callback shims — no `@opentelemetry/*` dependency)
+- Application Service: external [aiomatrix-appservice](https://github.com/FakeHoward/aiomatrix-appservice)
+
 ## Hello bot
 
 ```ts

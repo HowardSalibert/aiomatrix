@@ -7,7 +7,7 @@
  * @example
  * ```ts
  * import { createClient } from "redis";
- * import { createRedisSharedTokenStores, RedisStorage } from "aiomatrix";
+ * import { createRedisSharedTokenStores, RedisStorage } from "aiomatrix/redis";
  *
  * const redis = createClient();
  * await redis.connect();
@@ -157,9 +157,35 @@ export interface RedisSharedTokenStores {
   asyncNonceStore: RedisAsyncNonceStore;
   callbackAliasStore: RedisTtlStringMap;
   callbackBindStore: RedisTtlStringMap;
+  /** For {@link import("./middleware.js").once} multi-instance bots. */
+  onceStore: RedisOnceStore;
 }
 
-/** One-shot wiring for multi-instance bots (aliases, binds, used tokens, nonces). */
+/**
+ * Redis `SET NX` store for {@link import("./middleware.js").once}.
+ * Pass as `once({ key, store: stores.onceStore })`.
+ */
+export class RedisOnceStore {
+  constructor(
+    private readonly redis: RedisLike,
+    private readonly options: { prefix?: string; defaultTtlSeconds?: number } = {},
+  ) {}
+
+  private key(key: string): string {
+    return `${this.options.prefix ?? "aio:once:"}${key}`;
+  }
+
+  async tryAdd(key: string, ttlMs?: number): Promise<boolean> {
+    const ttlSeconds = Math.max(
+      1,
+      Math.ceil((ttlMs ?? (this.options.defaultTtlSeconds ?? 86400) * 1000) / 1000),
+    );
+    const result = await this.redis.set(this.key(key), "1", { EX: ttlSeconds, NX: true });
+    return result === "OK";
+  }
+}
+
+/** One-shot wiring for multi-instance bots (aliases, binds, used tokens, nonces, once). */
 export function createRedisSharedTokenStores(
   redis: RedisLike,
   options: { prefix?: string } = {},
@@ -175,6 +201,7 @@ export function createRedisSharedTokenStores(
     asyncNonceStore: new RedisAsyncNonceStore(redis, { prefix: `${prefix}nonce:` }),
     callbackAliasStore: new RedisTtlStringMap(redis, { prefix: `${prefix}cb:alias:` }),
     callbackBindStore: new RedisTtlStringMap(redis, { prefix: `${prefix}cb:bind:` }),
+    onceStore: new RedisOnceStore(redis, { prefix: `${prefix}once:` }),
   };
 }
 

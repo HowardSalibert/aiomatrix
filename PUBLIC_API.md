@@ -19,8 +19,8 @@ Breaking removals require a major bump.
 
 ## Subpaths (not root)
 
-- `aiomatrix/redis` — `createRedisSharedTokenStores`, `RedisStorage`, …
-- `aiomatrix/otel` — `createOtelMetricHandler`, `createOtelRequestHandler`
+- `aiomatrix/redis` — `createRedisSharedTokenStores`, `RedisStorage`, `RedisOnceStore`, …
+- `aiomatrix/otel` — `createOtelMetricHandler`, `createOtelRequestHandler` (callback shims; no OTel SDK)
 
 ## 0.8
 
@@ -37,10 +37,13 @@ Breaking removals require a major bump.
 - `aiomatrix doctor | migrate | create`
 - `create-aiomatrix`
 
-## Not frozen
+## Not frozen / deprecated
 
-- [aiomatrix-appservice](https://github.com/FakeHoward/aiomatrix-appservice)
+- [aiomatrix-appservice](https://github.com/FakeHoward/aiomatrix-appservice) (external)
 - `examples/`
 - test helpers
+- `guardedSendText` / `guardedSendHtml` — deprecated; prefer `ctx.answer` / `client.sendText`
+- `rotateMegolmNow` — deprecated alias of `invalidateMegolmShare`
+- `buildBootstrapFilter` — for custom sync loops only; SyncLoop uses runtime filter + bootstrap skip
 
 CI: `npm run check:api`.

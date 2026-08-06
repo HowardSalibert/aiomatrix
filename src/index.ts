@@ -209,7 +209,7 @@ export type {
   MessageHandler,
   SendEventOptions,
 } from "./client.js";
-export { buildMessageContent, editMessageWithOptions, markdownFormattedOrUndefined, sendMessageWithOptions, tokenizeKeyboard, txnIdFromIdempotencyKey } from "./send.js";
+export { buildMessageContent, editMessageWithOptions, markdownFormattedOrUndefined, readExistingEffectiveContent, readExistingMessageSource, sendEventWithOutbox, sendMessageWithOptions, sendStateWithOutbox, tokenizeKeyboard, txnIdFromIdempotencyKey, isTransientSendError } from "./send.js";
 export type { MessageSource, SendTarget } from "./send.js";
 
 // --------------------------------------------------------------------- infra
