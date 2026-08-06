@@ -34,11 +34,13 @@ jobs:
       - run: npm run check:api
       - run: npm run check:size
 
-  # The native crypto bindings are an optionalDependency: importing `aiomatrix`
-  # must work even where no prebuilt binary exists, as long as crypto is off.
-  no-native-crypto:
-    name: import without native crypto
+  # One ubuntu job for pack / audit / no-native-crypto so a GitHub Actions
+  # "Failed to resolve action download info" blip does not fail three separate
+  # runners that each need their own checkout + setup-node download.
+  ubuntu-extras:
+    name: pack / audit / no-native-crypto
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v5
       - uses: actions/setup-node@v5
@@ -47,11 +49,13 @@ jobs:
           cache: npm
       - run: npm ci
       - run: npm run build
-      - run: rm -rf node_modules/@matrix-org
-      - name: root entry must still import
-        run: node -e "import('./dist/index.js').then(m => { if (typeof m.Bot?.create !== 'function') process.exit(1); })"
-      - name: loadCryptoEngine must fail with a helpful ConfigurationError
+      - run: npm run test:appservice
+      - run: npm pack --dry-run
+      - run: npm run audit:deps
+      - name: import without native crypto
         run: |
+          rm -rf node_modules/@matrix-org
+          node -e "import('./dist/index.js').then(m => { if (typeof m.Bot?.create !== 'function') process.exit(1); })"
           node -e "
             import('./dist/index.js').then(async (m) => {
               try { await m.loadCryptoEngine(); process.exit(1); }
@@ -61,18 +65,6 @@ jobs:
               }
             });
           "
-
-  audit:
-    name: npm audit
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v5
-      - uses: actions/setup-node@v5
-        with:
-          node-version: "24"
-          cache: npm
-      - run: npm ci
-      - run: npm run audit:deps
 
   live:
     name: live e2ee (synapse)
@@ -87,17 +79,3 @@ jobs:
       - run: npm ci
       - run: npm run build
       - run: npm run test:live:ci
-
-  pack:
-    name: pack
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v5
-      - uses: actions/setup-node@v5
-        with:
-          node-version: "24"
-          cache: npm
-      - run: npm ci
-      - run: npm run build
-      - run: npm run test:appservice
-      - run: npm pack --dry-run
