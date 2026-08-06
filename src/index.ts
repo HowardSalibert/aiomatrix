@@ -290,6 +290,39 @@ export type { ScheduledJob, SchedulerOptions } from "./scheduler.js";
 export { ConsoleLogger, createDefaultLogger, parseLogLevel } from "./logger.js";
 export type { LogLevel, Logger } from "./logger.js";
 
+// ----------------------------------------------------------- 0.8 contracts
+export {
+  AIOMATRIX_SCHEMA_VERSION,
+  AIOMATRIX_EVENT_TYPES,
+  AIOMATRIX_CONTENT_KEYS,
+  AWARE_CONTRACT,
+  resolveCapabilityLevel,
+} from "./schema.js";
+export type { CapabilityLevel, ContractRequirement } from "./schema.js";
+export {
+  AIOMATRIX_SCHEMA,
+  checkSchemaVersion,
+  readSchemaVersion,
+} from "./schema-contract.js";
+export type { AiomatrixSchemaKey, SchemaVersionInfo } from "./schema-contract.js";
+export {
+  pipelineAiomatrixContent,
+  buildAiomatrixEnvelope,
+} from "./content-pipeline.js";
+export type { AiomatrixEnvelope } from "./content-pipeline.js";
+export { COLD_START_DISPATCH, shouldDispatchOnColdStart } from "./cold-start.js";
+export type { ColdStartUpdateKind } from "./cold-start.js";
+export { StorageLock } from "./storage-lock.js";
+export type { StorageLockInfo } from "./storage-lock.js";
+export { FileOutboxStore, flushOutbox } from "./outbox.js";
+export type { OutboxEntry, OutboxOptions, OutboxStore } from "./outbox.js";
+export { definePlugin } from "./plugin.js";
+export type { BotPlugin, PluginContext } from "./plugin.js";
+export { canSendToRoom } from "./send-readiness.js";
+export type { RoomSendReadiness } from "./send-readiness.js";
+export { migrateStorage } from "./cli/migrate.js";
+export type { MigrateResult } from "./cli/migrate.js";
+
 // -------------------------------------------------------------------- media
 export {
   DEFAULT_MEDIA_LIMIT_BYTES,

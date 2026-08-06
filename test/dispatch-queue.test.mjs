@@ -112,6 +112,28 @@ describe("DispatchQueue", () => {
     assert.deepEqual(order, ["a", "b", "c"]);
   });
 
+  it("does not starve other rooms behind a noisy room", async () => {
+    const queue = new DispatchQueue(1);
+    const gate = deferred();
+    const order = [];
+    const tasks = [
+      queue.run("!a:hs", async () => {
+        order.push("a0");
+        await gate.promise;
+      }),
+      queue.run("!a:hs", async () => void order.push("a1")),
+      queue.run("!a:hs", async () => void order.push("a2")),
+      queue.run("!b:hs", async () => void order.push("b")),
+    ];
+    await tick();
+    gate.resolve();
+    await Promise.all(tasks);
+    // Fair wake: after a0, prefer b (new room) before another a.
+    assert.equal(order[0], "a0");
+    assert.equal(order[1], "b");
+    assert.deepEqual(order.slice(2).sort(), ["a1", "a2"]);
+  });
+
   it("drains once every task settles", async () => {
     const queue = new DispatchQueue(1);
     const gate = deferred();

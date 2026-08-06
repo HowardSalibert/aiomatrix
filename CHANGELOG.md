@@ -5,6 +5,25 @@ semantic versioning.
 
 ## Unreleased
 
+## 0.8.0
+
+### Added
+
+- Schema contract: `AIOMATRIX_SCHEMA_VERSION`, `AIOMATRIX_SCHEMA`, `AWARE_CONTRACT`,
+  `resolveCapabilityLevel`; capability level `hybrid`.
+- Unified content pipeline: `pipelineAiomatrixContent` / `buildAiomatrixEnvelope`.
+- Outbox: `FileOutboxStore` / `flushOutbox`, `BotCreateOptions.outbox`.
+- Fairer multi-room wake in `DispatchQueue`.
+- Cold-start contract: `COLD_START_DISPATCH` / `shouldDispatchOnColdStart`.
+- `Bot.use(plugin)` / `definePlugin`; typed `BaseContext<…, Data>`.
+- `canSendToRoom` / `Bot.canSendToRoom`.
+- Multi-process `StorageLock` (default on; `storageLock: false` to disable).
+- CLI: `aiomatrix doctor | migrate | create`.
+- Adapter subpaths: `aiomatrix/redis`, `aiomatrix/otel` (docs under `packages/`).
+- Universal TS Application Service under `packages/appservice` (any HS with AS API;
+  not a Synapse Python module). CI: `test:appservice`.
+- Docs: `SCENES.md`, `COMPAT.md`, `PUBLIC_API.md`; CI `check:api` / `check:size`.
+
 ## 0.7.0
 
 ### Added

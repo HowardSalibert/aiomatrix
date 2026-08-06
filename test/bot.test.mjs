@@ -88,6 +88,7 @@ async function makeBot(options = {}) {
     crypto: false,
     storagePath: dir,
     logger: "silent",
+    storageLock: false,
     fetchImpl,
     ...options,
   });
@@ -111,6 +112,7 @@ describe("Bot.create", () => {
         crypto: false,
         storagePath: dir,
         logger: "silent",
+        storageLock: false,
         fetchImpl: homeserver(),
       }),
       ConfigurationError,
@@ -131,6 +133,7 @@ describe("Bot.create", () => {
         accessToken: "tok",
         storagePath: dir,
         logger: "silent",
+        storageLock: false,
         fetchImpl: homeserver({ "/account/whoami": { user_id: "@bot:example.org" } }),
       }),
       /deviceId is REQUIRED/,
@@ -156,6 +159,7 @@ describe("Bot.create", () => {
       crypto: false,
       storagePath: dir,
       logger: "silent",
+      storageLock: false,
       fetchImpl,
     };
     await Bot.create(options);

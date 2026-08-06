@@ -100,17 +100,23 @@ export class DispatchQueue {
     this.globalActive = Math.max(0, this.globalActive - 1);
     this.roomActive.delete(roomId);
     if (this.closed) return;
-    // Wake the first waiter that can now proceed, preserving FIFO order.
-    for (let i = 0; i < this.waiters.length; i++) {
-      const waiter = this.waiters[i];
-      if (!waiter) continue;
-      if (this.canRun(waiter.roomId)) {
+    // Fair wake: prefer waiters from a *different* room than the one that just
+    // finished, so a noisy room cannot starve others queued behind it.
+    const wakeOne = (preferOtherRoom: boolean): boolean => {
+      for (let i = 0; i < this.waiters.length; i++) {
+        const waiter = this.waiters[i];
+        if (!waiter) continue;
+        if (preferOtherRoom && waiter.roomId === roomId) continue;
+        if (!this.canRun(waiter.roomId)) continue;
         this.waiters.splice(i, 1);
         this.take(waiter.roomId);
         waiter.resume();
-        if (this.globalActive >= this.globalLimit) break;
-        i -= 1;
+        return true;
       }
+      return false;
+    };
+    while (this.globalActive < this.globalLimit) {
+      if (!wakeOne(true) && !wakeOne(false)) break;
     }
   }
 }

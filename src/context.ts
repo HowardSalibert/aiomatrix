@@ -99,6 +99,13 @@ abstract class ContextBase<T extends UpdateType> implements BaseContext<T> {
     return this.abortController.signal;
   }
 
+  protected roomCapability(): "stock" | "aware" {
+    if (typeof this.deps.bot.capabilityForRoom === "function") {
+      return this.deps.bot.capabilityForRoom(this.roomId);
+    }
+    return this.deps.bot.clientProfile === "aware" ? "aware" : "stock";
+  }
+
   get client(): MatrixClient {
     return this.deps.client;
   }
@@ -155,7 +162,11 @@ abstract class ContextBase<T extends UpdateType> implements BaseContext<T> {
 
   /** Merge bot-level {@link MessageDefaults} under per-call options. */
   protected withDefaults(options?: SendOptions): SendOptions | undefined {
-    const defaults = this.deps.messageDefaults;
+    const botDefaults =
+      typeof this.deps.bot.effectiveMessageDefaults === "function"
+        ? this.deps.bot.effectiveMessageDefaults(this.roomId)
+        : undefined;
+    const defaults = botDefaults ?? this.deps.messageDefaults;
     if (!defaults) return options;
     return {
       ...(defaults.keyboardFallback !== undefined
@@ -246,7 +257,7 @@ abstract class ContextBase<T extends UpdateType> implements BaseContext<T> {
   ): Promise<string> {
     const useEvent =
       options?.forceEvent === true ||
-      this.deps.bot.clientProfile === "aware" ||
+      this.roomCapability() === "aware" ||
       this.hostCapabilities().toast;
     if (useEvent) {
       return this.deps.client.sendEvent(this.roomId, TOAST_EVENT_TYPE, {
@@ -268,7 +279,7 @@ abstract class ContextBase<T extends UpdateType> implements BaseContext<T> {
   ): Promise<string> {
     const useEvent =
       options?.forceEvent === true ||
-      this.deps.bot.clientProfile === "aware" ||
+      this.roomCapability() === "aware" ||
       this.hostCapabilities().progress;
     if (useEvent) {
       return this.deps.client.sendEvent(this.roomId, PROGRESS_EVENT_TYPE, {
@@ -642,7 +653,7 @@ class CallbackContextImpl extends ContextBase<"callback_query"> implements Callb
     if (options?.text) {
       const useToast =
         options.timeline !== true &&
-        (this.deps.bot.clientProfile === "aware" || this.hostCapabilities().toast);
+        (this.roomCapability() === "aware" || this.hostCapabilities().toast);
       if (useToast) {
         await this.deps.client.sendEvent(this.roomId, CALLBACK_ANSWER_EVENT_TYPE, {
           text: options.text,

@@ -31,6 +31,19 @@ jobs:
       - run: npm ci
       - run: npm run build
       - run: npm run test:only
+      - run: npm run check:api
+      - run: npm run check:size
+
+  appservice:
+    name: appservice (universal AS)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: "24"
+      - run: npm run test:appservice
 
   # The native crypto bindings are an optionalDependency: importing `aiomatrix`
   # must work even where no prebuilt binary exists, as long as crypto is off.

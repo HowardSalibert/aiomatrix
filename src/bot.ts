@@ -87,6 +87,11 @@ import {
   type WidgetOptions,
 } from "./miniapp/widget.js";
 import { Scheduler } from "./scheduler.js";
+import { resolveCapabilityLevel, type CapabilityLevel } from "./schema.js";
+import { StorageLock } from "./storage-lock.js";
+import { FileOutboxStore, flushOutbox, type OutboxStore } from "./outbox.js";
+import { definePlugin, type BotPlugin } from "./plugin.js";
+import { canSendToRoom, type RoomSendReadiness } from "./send-readiness.js";
 import type {
   AnyContext,
   BotCreateOptions,
@@ -227,6 +232,9 @@ export class Bot {
   private syncStaleNotified = false;
   private readonly hostCapabilitiesByRoom = new Map<string, ResolvedHostCapabilities>();
   private readonly cryptoHealth: BotCryptoHealth;
+  private readonly storageLock: StorageLock | null = null;
+  private readonly outbox: OutboxStore | null = null;
+  private readonly plugins: BotPlugin[] = [];
   private readonly waiters: Array<{
     filter: (ctx: AnyContext) => boolean | Promise<boolean>;
     roomId: string | null;
@@ -244,6 +252,8 @@ export class Bot {
     options: BotCreateOptions;
     configuredDeviceId?: string;
     cryptoHealth?: BotCryptoHealth;
+    storageLock?: StorageLock | null;
+    outbox?: OutboxStore | null;
   }) {
     this.cryptoHealth = params.cryptoHealth ?? {
       shareRoomKeyCount: 0,
@@ -257,6 +267,11 @@ export class Bot {
     this.cryptoEnabled = params.cryptoEnabled;
     this.logger = params.logger.child("bot");
     this.options = params.options;
+    this.storageLock = params.storageLock ?? null;
+    this.outbox = params.outbox ?? null;
+    if (params.options.plugins) {
+      for (const p of params.options.plugins) this.plugins.push(definePlugin(p));
+    }
     if (params.configuredDeviceId !== undefined) {
       this.configuredDeviceId = params.configuredDeviceId;
     }
@@ -385,6 +400,17 @@ export class Bot {
       logger,
       onCryptoLog: noteCrypto,
     });
+    let storageLock: StorageLock | null = null;
+    if (options.storageLock !== false) {
+      storageLock = new StorageLock(created.storagePath);
+      storageLock.acquire();
+    }
+    let outbox: OutboxStore | null = null;
+    if (options.outbox === true) {
+      outbox = new FileOutboxStore(created.storagePath);
+    } else if (options.outbox && typeof options.outbox === "object") {
+      outbox = options.outbox;
+    }
     const bot = new Bot({
       client: created.client,
       storagePath: created.storagePath,
@@ -392,10 +418,15 @@ export class Bot {
       logger,
       options,
       cryptoHealth,
+      storageLock,
+      outbox,
       ...(created.configuredDeviceId !== undefined
         ? { configuredDeviceId: created.configuredDeviceId }
         : {}),
     });
+    for (const plugin of bot.plugins) {
+      await plugin.install(bot, { logger: bot.logger, storagePath: bot.storagePath });
+    }
     return bot;
   }
 
@@ -422,9 +453,25 @@ export class Bot {
     return this.client.crypto?.clientDeviceId ?? this.configuredDeviceId ?? null;
   }
 
-  /** Effective client profile (`stock` when unset). */
-  get clientProfile(): "stock" | "aware" {
-    return this.options.clientProfile === "aware" ? "aware" : "stock";
+  /** Effective client profile (`stock` when unset). Configured level, not per-room. */
+  get clientProfile(): CapabilityLevel {
+    return this.options.clientProfile ?? "stock";
+  }
+
+  /**
+   * Install a plugin (stores, metrics, middleware wiring). Prefer
+   * `BotCreateOptions.plugins` so install runs before `start`.
+   */
+  use(plugin: BotPlugin): this {
+    const p = definePlugin(plugin);
+    this.plugins.push(p);
+    void p.install(this, { logger: this.logger, storagePath: this.storagePath });
+    return this;
+  }
+
+  /** Crypto / peer-key readiness for sending into a room. */
+  canSendToRoom(roomId: string): Promise<RoomSendReadiness> {
+    return canSendToRoom(this.client, roomId);
   }
 
   /**
@@ -553,6 +600,19 @@ export class Bot {
     });
 
     this.started = true;
+    for (const plugin of this.plugins) {
+      await plugin.onStart?.(this, dispatcher);
+    }
+    if (this.outbox) {
+      const result = await flushOutbox({
+        store: this.outbox,
+        send: (roomId, eventType, content, txnId) =>
+          this.client.sendEvent(roomId, eventType, content, txnId ? { txnId } : undefined),
+      });
+      if (result.sent || result.dropped) {
+        this.logger.info(`outbox flush: sent=${result.sent} dropped=${result.dropped}`);
+      }
+    }
     this.syncStaleNotified = false;
     if (this.options.onSyncStale) {
       this.syncWatchTimer = setInterval(() => {
@@ -622,10 +682,18 @@ export class Bot {
       clearInterval(this.syncWatchTimer);
       this.syncWatchTimer = null;
     }
+    for (const plugin of this.plugins) {
+      try {
+        await plugin.onStop?.(this);
+      } catch (err) {
+        this.logger.warn(`plugin ${plugin.name} onStop failed`, err);
+      }
+    }
     this.scheduler.stop();
     await this.client.stop();
     await this.client.crypto?.close();
     this.durableStores?.flush();
+    this.storageLock?.release();
     this.started = false;
     this.logger.info("stopped");
   }
@@ -659,10 +727,20 @@ export class Bot {
   getHostCapabilities(roomId: string): ResolvedHostCapabilities {
     const cached = this.hostCapabilitiesByRoom.get(roomId);
     if (cached) return cached;
+    const level = resolveCapabilityLevel(this.clientProfile, false);
     return parseHostCapabilities(
-      this.clientProfile === "aware"
-        ? { client_profile: "aware" }
-        : { client_profile: "stock" },
+      level === "aware" ? { client_profile: "aware" } : { client_profile: "stock" },
+    );
+  }
+
+  /**
+   * Effective lean/stock mode for a room (`hybrid` consults host capabilities).
+   */
+  capabilityForRoom(roomId: string): "stock" | "aware" {
+    const host = this.getHostCapabilities(roomId);
+    return resolveCapabilityLevel(
+      this.clientProfile,
+      host.profile === "aware" || host.keyboardNative,
     );
   }
 
@@ -694,10 +772,14 @@ export class Bot {
   /**
    * Effective send defaults. `parseMode: "markdown"` is on unless overridden.
    * `clientProfile: "aware"` applies {@link AWARE_MESSAGE_DEFAULTS}.
+   * For `hybrid`, pass `roomId` so host capabilities can flip lean mode.
    */
-  effectiveMessageDefaults(): MessageDefaults {
-    const aware =
-      this.options.clientProfile === "aware" ? AWARE_MESSAGE_DEFAULTS : null;
+  effectiveMessageDefaults(roomId?: string): MessageDefaults {
+    const level =
+      roomId !== undefined
+        ? this.capabilityForRoom(roomId)
+        : resolveCapabilityLevel(this.clientProfile, this.clientProfile === "aware");
+    const aware = level === "aware" ? AWARE_MESSAGE_DEFAULTS : null;
     return {
       parseMode: "markdown",
       ...aware,
@@ -706,9 +788,12 @@ export class Bot {
   }
 
   /** MiniApp card defaults after `clientProfile` / explicit `miniApp.*`. */
-  effectiveMiniAppDefaults(): Partial<MiniAppCardOptions> {
-    const aware =
-      this.options.clientProfile === "aware" ? { ...AWARE_MINI_APP_DEFAULTS } : {};
+  effectiveMiniAppDefaults(roomId?: string): Partial<MiniAppCardOptions> {
+    const level =
+      roomId !== undefined
+        ? this.capabilityForRoom(roomId)
+        : resolveCapabilityLevel(this.clientProfile, this.clientProfile === "aware");
+    const aware = level === "aware" ? { ...AWARE_MINI_APP_DEFAULTS } : {};
     const configured = this.options.miniApp ?? {};
     return {
       ...aware,
@@ -974,7 +1059,7 @@ export class Bot {
   async sendPoll(roomId: string, options: SendPollOptions): Promise<string> {
     const leanBody =
       options.leanBody ??
-      (this.clientProfile === "aware" || this.getHostCapabilities(roomId).pollUi);
+      (this.capabilityForRoom(roomId) === "aware" || this.getHostCapabilities(roomId).pollUi);
     const content = buildPollStartContent({ ...options, leanBody });
     return this.client.sendEvent(
       roomId,

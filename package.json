@@ -1,12 +1,12 @@
 {
   "name": "aiomatrix",
-  "version": "0.7.0",
+  "version": "0.8.0",
   "description": "Aiogram-like framework for Matrix bots: routers, filters, FSM, inline keyboards, E2EE and MiniApps",
   "type": "module",
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
   "bin": {
-    "aiomatrix": "./dist/cli/doctor.js"
+    "aiomatrix": "./dist/cli/main.js"
   },
   "sideEffects": false,
   "exports": {
@@ -22,6 +22,14 @@
       "types": "./dist/miniapp/index.d.ts",
       "import": "./dist/miniapp/index.js"
     },
+    "./redis": {
+      "types": "./dist/redis-stores.d.ts",
+      "import": "./dist/redis-stores.js"
+    },
+    "./otel": {
+      "types": "./dist/otel.d.ts",
+      "import": "./dist/otel.js"
+    },
     "./package.json": "./package.json"
   },
   "files": [
@@ -30,6 +38,9 @@
     "README.md",
     "MINIAPP.md",
     "AWARE_HOST.md",
+    "SCENES.md",
+    "COMPAT.md",
+    "PUBLIC_API.md",
     "CHANGELOG.md",
     "AUDIT.md",
     "SECURITY.md",
@@ -42,14 +53,17 @@
     "build": "tsc",
     "clean": "node -e \"require('node:fs').rmSync('dist', { recursive: true, force: true })\"",
     "typecheck": "tsc --noEmit",
-    "test": "npm run build && node --test",
-    "test:only": "node --test",
-    "test:live": "node --test test/live",
+    "test": "npm run build && node --test \"test/**/*.mjs\"",
+    "test:only": "node --test \"test/**/*.mjs\"",
+    "test:live": "node --test \"test/live/**/*.mjs\"",
     "test:live:ci": "node scripts/live-hs.mjs",
+    "test:appservice": "npm --prefix packages/appservice install && npm --prefix packages/appservice test",
     "audit:deps": "npm audit --omit=dev --audit-level=high",
-    "doctor": "node dist/cli/doctor.js",
+    "doctor": "node dist/cli/main.js doctor",
+    "check:api": "node scripts/check-public-api.mjs",
+    "check:size": "node scripts/check-bundle-size.mjs",
     "dev": "tsx examples/echo/src/main.ts",
-    "prepublishOnly": "npm run clean && npm run build && npm run test:only"
+    "prepublishOnly": "npm run clean && npm run build && npm run test:only && npm run check:api && npm run check:size"
   },
   "keywords": [
     "matrix",
@@ -64,7 +78,8 @@
     "webapp",
     "widget",
     "fsm",
-    "aiomatrix"
+    "aiomatrix",
+    "appservice"
   ],
   "author": "Howard Salibert / StudNovSU contributors",
   "license": "MIT",

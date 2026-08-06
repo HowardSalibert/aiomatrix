@@ -77,3 +77,13 @@ import { CALLBACK_ANSWER_EVENT_TYPE } from "aiomatrix";
 - Ops hooks: `onSyncStale`, `onRateLimited`, `onStoreWarn`, optional `onMetric`.
 - Device GC: `relocateSession({ pruneOtherDevices: true })` or cautious `pruneOtherDevicesOnStart`
   (password required, idle ≥ 7 days by default).
+
+## Schema contract (0.8+)
+
+- Library constant: `AIOMATRIX_SCHEMA_VERSION` / per-field `AIOMATRIX_SCHEMA`.
+- Normative checklist: `AWARE_CONTRACT` (must / best_effort).
+- Capability levels: `stock | aware | hybrid` via `resolveCapabilityLevel`.
+- Unified receive path: `pipelineAiomatrixContent(content)` → envelope.
+- Cold start: `COLD_START_DISPATCH` — timeline updates never dispatch during bootstrap.
+
+See also `COMPAT.md`, `SCENES.md`, `PUBLIC_API.md`.
