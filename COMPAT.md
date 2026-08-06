@@ -9,15 +9,15 @@ Homeservers and clients against aiomatrix **0.8**.
 | Synapse | yes | yes | yes |
 | Dendrite | yes | yes | yes |
 | Conduit | yes | best-effort | yes |
-| Grapevine / others with Client-Server + AS | yes | depends on crypto store | if AS implemented |
+| Others with Client-Server + AS | yes | depends on crypto store | if AS implemented |
 
-Crypto uses `@matrix-org/matrix-sdk-crypto-nodejs` (optional). Without it, set `crypto: false`.
+Crypto: `@matrix-org/matrix-sdk-crypto-nodejs` (optional). Without it, `crypto: false`.
 
 ## Host / client profiles
 
 | Profile | Keyboard fallback | MiniApp lean | Toasts |
 |---|---|---|---|
-| `stock` | on (Element-safe) | off | notice fallback |
+| `stock` | on | off | notice fallback |
 | `aware` | off | on | `dev.aiomatrix.*` events |
 | `hybrid` | per-room via `dev.aiomatrix.host` | per-room | per-room |
 
@@ -25,8 +25,7 @@ Crypto uses `@matrix-org/matrix-sdk-crypto-nodejs` (optional). Without it, set `
 
 `AIOMATRIX_SCHEMA_VERSION` / `AIOMATRIX_SCHEMA` — see `AWARE_HOST.md` and `AWARE_CONTRACT`.
 
-## Application Service (universal)
+## Application Service
 
-Not Synapse-only. TypeScript AS under `packages/appservice` (extract target:
-FakeHoward/aiomatrix-appservice). Works with any HS that implements the Matrix
-Application Service API. TDD via Node tests in CI (`npm run test:appservice`).
+Separate package: [aiomatrix-appservice](https://github.com/FakeHoward/aiomatrix-appservice).
+Any homeserver with the Matrix Application Service API.

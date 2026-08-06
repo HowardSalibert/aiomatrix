@@ -6,7 +6,8 @@
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
   "bin": {
-    "aiomatrix": "./dist/cli/main.js"
+    "aiomatrix": "./dist/cli/main.js",
+    "create-aiomatrix": "./dist/cli/create-aiomatrix.js"
   },
   "sideEffects": false,
   "exports": {
@@ -57,7 +58,7 @@
     "test:only": "node --test \"test/**/*.mjs\"",
     "test:live": "node --test \"test/live/**/*.mjs\"",
     "test:live:ci": "node scripts/live-hs.mjs",
-    "test:appservice": "npm --prefix packages/appservice install && npm --prefix packages/appservice test",
+    "test:appservice": "node -e \"require('fs').readFileSync('packages/appservice/README.md','utf8').includes('FakeHoward/aiomatrix-appservice')||process.exit(1)\"",
     "audit:deps": "npm audit --omit=dev --audit-level=high",
     "doctor": "node dist/cli/main.js doctor",
     "check:api": "node scripts/check-public-api.mjs",

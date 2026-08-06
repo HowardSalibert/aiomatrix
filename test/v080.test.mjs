@@ -9,14 +9,17 @@ import {
   AWARE_CONTRACT,
   COLD_START_DISPATCH,
   FileOutboxStore,
+  RateLimitedError,
   StorageLock,
   buildAiomatrixEnvelope,
   checkSchemaVersion,
   definePlugin,
+  finalizeAiomatrixContent,
   flushOutbox,
   migrateStorage,
   pipelineAiomatrixContent,
   resolveCapabilityLevel,
+  sendMessageWithOptions,
   shouldDispatchOnColdStart,
 } from "../dist/index.js";
 
@@ -35,17 +38,20 @@ describe("0.8 schema + pipeline", () => {
     assert.equal(resolveCapabilityLevel("hybrid", false), "stock");
   });
 
-  it("pipelineAiomatrixContent for keyboard", () => {
+  it("pipeline + finalize for keyboard", () => {
     const content = {
       msgtype: "m.text",
       body: "hi",
-      "dev.aiomatrix.keyboard": { version: 1, rows: [] },
+      "dev.aiomatrix.keyboard": { version: 1, inline: [] },
     };
     const env = pipelineAiomatrixContent(content);
     assert.equal(env?.kind, "keyboard");
     assert.ok(env?.normalized);
     const built = buildAiomatrixEnvelope("raw", content);
     assert.equal(built.version, AIOMATRIX_SCHEMA.envelope);
+    const validated = finalizeAiomatrixContent(content);
+    assert.equal(validated.ok, true);
+    assert.equal(validated.envelope?.kind, "keyboard");
   });
 });
 
@@ -98,6 +104,28 @@ describe("0.8 storage lock + migrate + outbox", () => {
     assert.equal(result.sent, 1);
     assert.equal(sent.length, 1);
     assert.equal((await store.list()).length, 0);
+  });
+
+  it("sendMessageWithOptions enqueues on transient failure", async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "aio-out-send-"));
+    const store = new FileOutboxStore(dir);
+    const client = {
+      sendEvent: async () => {
+        throw new RateLimitedError(1000, "PUT", "/_matrix/client/v3/rooms/!r:hs/send/m.room.message/t");
+      },
+    };
+    await assert.rejects(
+      () =>
+        sendMessageWithOptions(
+          { client, roomId: "!r:hs", outbox: store },
+          { text: "hi" },
+        ),
+      RateLimitedError,
+    );
+    const pending = await store.list();
+    assert.equal(pending.length, 1);
+    assert.equal(pending[0].eventType, "m.room.message");
+    assert.equal(pending[0].content.body, "hi");
   });
 });
 

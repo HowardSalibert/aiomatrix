@@ -15,7 +15,7 @@ device-stable login.
 Optional Redis (multi-instance):
 
 ```ts
-import { createRedisSharedTokenStores, RedisStorage } from "aiomatrix";
+import { createRedisSharedTokenStores, RedisStorage } from "aiomatrix/redis";
 ```
 
 `redis` is an **optional peer dependency** of aiomatrix — install it only when needed.

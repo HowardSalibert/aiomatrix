@@ -145,6 +145,7 @@ abstract class ContextBase<T extends UpdateType> implements BaseContext<T> {
   /** Target used by every send helper on this context. */
   protected sendTarget(): SendTarget {
     this.assertWritable();
+    const outbox = this.deps.bot.outboxStore;
     return {
       client: this.deps.client,
       roomId: this.roomId,
@@ -152,6 +153,10 @@ abstract class ContextBase<T extends UpdateType> implements BaseContext<T> {
       triggerEventId: this.eventId || null,
       threadRootId: this.threadRoot(),
       callbackUserId: this.senderId || null,
+      ...(outbox ? { outbox } : {}),
+      onContentWarn: (warnings) => {
+        this.deps.logger.warn(`aiomatrix content schema: ${warnings.join("; ")}`);
+      },
     };
   }
 

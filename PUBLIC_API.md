@@ -1,7 +1,7 @@
 # Public API freeze (0.8)
 
-Symbols below are **semver-stable** for the `aiomatrix` package root export.
-Breaking removals require a major bump. Additive exports are fine in minors.
+Symbols below are semver-stable for the `aiomatrix` root export.
+Breaking removals require a major bump.
 
 ## Core
 
@@ -16,30 +16,31 @@ Breaking removals require a major bump. Additive exports are fine in minors.
 - `mapBotError`, `emitMetric`
 - `normalizeAiomatrixContent`, `formatMessagePreview`, `classifyAiomatrixContent`
 - `buildBotCapabilitiesContent`, `parseHostCapabilities`
-- `createRedisSharedTokenStores`, `RedisStorage` (also `aiomatrix/redis`)
-- `createOtelMetricHandler`, `createOtelRequestHandler` (also `aiomatrix/otel`)
 
-## 0.8 additions (stable)
+## Subpaths (not root)
+
+- `aiomatrix/redis` — `createRedisSharedTokenStores`, `RedisStorage`, …
+- `aiomatrix/otel` — `createOtelMetricHandler`, `createOtelRequestHandler`
+
+## 0.8
 
 - `AIOMATRIX_SCHEMA_VERSION`, `AIOMATRIX_SCHEMA`, `AWARE_CONTRACT`, `resolveCapabilityLevel`
-- `pipelineAiomatrixContent`, `buildAiomatrixEnvelope`
+- `pipelineAiomatrixContent`, `buildAiomatrixEnvelope`, `finalizeAiomatrixContent`
 - `COLD_START_DISPATCH`, `shouldDispatchOnColdStart`
 - `StorageLock`, `FileOutboxStore`, `flushOutbox`
 - `definePlugin`, `canSendToRoom`, `migrateStorage`
-- `Bot.use`, `Bot.canSendToRoom`, `Bot.capabilityForRoom`
-- `clientProfile: "hybrid"`, `storageLock`, `outbox`, `plugins` options
+- `Bot.use`, `Bot.canSendToRoom`, `Bot.capabilityForRoom`, `Bot.outboxStore`
+- `clientProfile: "hybrid"`, `storageLock`, `outbox`, `plugins`
 
 ## CLI
 
-- `aiomatrix doctor`
-- `aiomatrix migrate`
-- `aiomatrix create <dir>`
+- `aiomatrix doctor | migrate | create`
+- `create-aiomatrix`
 
 ## Not frozen
 
-- `packages/appservice` (separate package surface)
-- Anything under `examples/`
-- Test helpers
-- Undocumented `@internal` members
+- [aiomatrix-appservice](https://github.com/FakeHoward/aiomatrix-appservice)
+- `examples/`
+- test helpers
 
-CI enforces this list via `npm run check:api`.
+CI: `npm run check:api`.

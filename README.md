@@ -373,19 +373,25 @@ Aware Matrix hosts: [AWARE_HOST.md](./AWARE_HOST.md) (keyboard/MiniApp flags, pr
 ## Subpath exports
 
 ```ts
-import { Bot } from "aiomatrix";              // everything except the native crypto class
-import { CryptoEngine } from "aiomatrix/crypto"; // needs the optional native package
+import { Bot } from "aiomatrix";
+import { CryptoEngine } from "aiomatrix/crypto";
 import { validateInitData } from "aiomatrix/miniapp";
+import { createRedisSharedTokenStores } from "aiomatrix/redis";
+import { createOtelMetricHandler } from "aiomatrix/otel";
 ```
 
 ## Docs
 
 - [MINIAPP.md](./MINIAPP.md) — MiniApp protocol, bridge API, backend, widgets
 - [AWARE_HOST.md](./AWARE_HOST.md) — aware-client contract and timeline previews
+- [SCENES.md](./SCENES.md) — waitFor / Conversation / FSM cookbook
+- [COMPAT.md](./COMPAT.md) — homeserver and profile matrix
+- [PUBLIC_API.md](./PUBLIC_API.md) — frozen public API
 - [docs/LIVE_TESTS.md](./docs/LIVE_TESTS.md) — Synapse Docker live E2EE tests
 - [SECURITY.md](./SECURITY.md) — vulnerability reporting
 - [CHANGELOG.md](./CHANGELOG.md)
 - [AUDIT.md](./AUDIT.md) — hardening cycles and residual risks
+- [aiomatrix-appservice](https://github.com/FakeHoward/aiomatrix-appservice) — Application Service
 
 ## License
 

@@ -23,6 +23,7 @@ const REQUIRED = [
   "resolveCapabilityLevel",
   "pipelineAiomatrixContent",
   "buildAiomatrixEnvelope",
+  "finalizeAiomatrixContent",
   "COLD_START_DISPATCH",
   "shouldDispatchOnColdStart",
   "StorageLock",
@@ -31,8 +32,6 @@ const REQUIRED = [
   "definePlugin",
   "canSendToRoom",
   "migrateStorage",
-  "createRedisSharedTokenStores",
-  "createOtelMetricHandler",
 ];
 
 let failed = 0;
@@ -52,10 +51,21 @@ for (const sub of ["./redis", "./otel"]) {
   }
 }
 
+const redis = await import(pathToFileURL(path.join(root, "dist/redis-stores.js")).href);
+const otel = await import(pathToFileURL(path.join(root, "dist/otel.js")).href);
+if (typeof redis.createRedisSharedTokenStores !== "function") {
+  console.error("aiomatrix/redis missing createRedisSharedTokenStores");
+  failed += 1;
+}
+if (typeof otel.createOtelMetricHandler !== "function") {
+  console.error("aiomatrix/otel missing createOtelMetricHandler");
+  failed += 1;
+}
+
 if (!entry.includes("AIOMATRIX_SCHEMA_VERSION")) {
   console.error("dist/index.js does not reference schema version (unexpected tree-shake?)");
   failed += 1;
 }
 
 if (failed) process.exit(1);
-console.log(`check:api ok (${REQUIRED.length} symbols)`);
+console.log(`check:api ok (${REQUIRED.length} symbols + redis/otel subpaths)`);

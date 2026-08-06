@@ -38,6 +38,8 @@ import {
 import { SyncLoop, type JoinedRoomSync, type SyncResponse } from "./sync.js";
 import type { BotCreateOptions, MatrixEvent, MatrixMessageEvent } from "./types.js";
 import { escapeHtml, isPlainObject, readString, resolveStoragePath } from "./util.js";
+import { shouldDispatchOnColdStart } from "./cold-start.js";
+import { HOST_CAPABILITIES_STATE_EVENT_TYPE } from "./host-capabilities.js";
 
 export interface CreatedClient {
   client: MatrixClient;
@@ -57,6 +59,11 @@ export interface ClientEventMeta {
   decrypted: boolean;
   /** True when the event was recovered by a late Megolm key. */
   lateDecrypt: boolean;
+  /**
+   * True only for the first sync bootstrap (not timeline gaps).
+   * Used with {@link import("./cold-start.js").shouldDispatchOnColdStart}.
+   */
+  bootstrap?: boolean;
 }
 
 export interface ClientHandlers {
@@ -1192,11 +1199,13 @@ export class MatrixClient {
     for (const event of timeline) applyEvent(event, false);
 
     // Aware-host capability state must be visible even when it only appears in
-    // the state block (not the timeline).
+    // the state block (not the timeline). Honour COLD_START_DISPATCH.
     for (const event of room.state?.events ?? []) {
-      if (event.type === "dev.aiomatrix.host") {
+      if (event.type === HOST_CAPABILITIES_STATE_EVENT_TYPE) {
+        if (!shouldDispatchOnColdStart("host_capabilities_state", isBootstrap)) continue;
         this.handlers.onRoomEvent?.(roomId, event as MatrixEvent, {
           historical: isBootstrap,
+          bootstrap: isBootstrap,
           decrypted: false,
           lateDecrypt: false,
         });
@@ -1213,6 +1222,7 @@ export class MatrixClient {
     }
 
     // Bootstrap: warm crypto/state only, never replay history into handlers.
+    // Normative: COLD_START_DISPATCH (message/callback/… = after_bootstrap).
     if (isBootstrap) return;
 
     for (const event of timeline) {

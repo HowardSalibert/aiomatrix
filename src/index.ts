@@ -124,14 +124,8 @@ export {
   createFileSharedTokenStores,
 } from "./file-ttl-map.js";
 export type { FileSharedTokenStores } from "./file-ttl-map.js";
-export {
-  RedisAsyncNonceStore,
-  RedisAsyncUsedTokenStore,
-  RedisStorage,
-  RedisTtlStringMap,
-  createRedisSharedTokenStores,
-} from "./redis-stores.js";
-export type { RedisLike, RedisSharedTokenStores } from "./redis-stores.js";
+// Redis / OTel adapters live behind subpath exports (`aiomatrix/redis`,
+// `aiomatrix/otel`) — not the root entry — so core stays free of adapter noise.
 export {
   AWARE_MESSAGE_DEFAULTS,
   AWARE_MINI_APP_DEFAULTS,
@@ -188,13 +182,7 @@ export type { HostCapabilitiesContent, ResolvedHostCapabilities } from "./host-c
 // ---------------------------------------------------------------- error map
 export { mapBotError } from "./error-map.js";
 
-// ----------------------------------------------------------------------- otel
-export { createOtelMetricHandler, createOtelRequestHandler } from "./otel.js";
-export type {
-  OtelAdapterOptions,
-  OtelLikeCounter,
-  OtelLikeHistogram,
-} from "./otel.js";
+// otel → `aiomatrix/otel` (not root)
 
 // --------------------------------------------------------------------- HTML
 export { MATRIX_ALLOWED_TAGS, fmt, html, markdownToHtml, sanitizeMatrixHtml } from "./html.js";
@@ -310,6 +298,8 @@ export {
   buildAiomatrixEnvelope,
 } from "./content-pipeline.js";
 export type { AiomatrixEnvelope } from "./content-pipeline.js";
+export { finalizeAiomatrixContent } from "./content-validate.js";
+export type { ContentValidation } from "./content-validate.js";
 export { COLD_START_DISPATCH, shouldDispatchOnColdStart } from "./cold-start.js";
 export type { ColdStartUpdateKind } from "./cold-start.js";
 export { StorageLock } from "./storage-lock.js";

@@ -56,6 +56,7 @@ import {
   pollStartEventType,
   type SendPollOptions,
 } from "./polls.js";
+import { shouldDispatchOnColdStart, type ColdStartUpdateKind } from "./cold-start.js";
 import {
   HOST_CAPABILITIES_STATE_EVENT_TYPE,
   parseHostCapabilities,
@@ -474,6 +475,11 @@ export class Bot {
     return canSendToRoom(this.client, roomId);
   }
 
+  /** Active outbox store when `outbox: true` (or custom) was set at create. */
+  get outboxStore(): OutboxStore | null {
+    return this.outbox;
+  }
+
   /**
    * Wait for the next matching update. Matching updates are consumed (not
    * delivered to routers). Prefer {@link BaseContext.waitFor} from a handler.
@@ -762,10 +768,10 @@ export class Bot {
     options?: SendOptions,
   ): Promise<string> {
     return editMessageWithOptions(
-      { client: this.client, roomId, callbacks: this.callbacks },
+      this.messageSendTarget(roomId),
       eventId,
       { text },
-      { ...this.effectiveMessageDefaults(), ...options },
+      { ...this.effectiveMessageDefaults(roomId), ...options },
     );
   }
 
@@ -872,6 +878,12 @@ export class Bot {
     ) {
       this.hostCapabilitiesByRoom.set(roomId, parseHostCapabilities(event.content));
     }
+
+    const coldKind = coldStartKindForEvent(event);
+    if (meta.bootstrap === true && !shouldDispatchOnColdStart(coldKind, true)) {
+      return;
+    }
+
     // The bot's own echoes are never updates; handlers that need them can read
     // the timeline explicitly.
     if (event.sender === this.selfId) return;
@@ -1023,21 +1035,30 @@ export class Bot {
 
   // ---------------------------------------------------------------- helpers
 
+  private messageSendTarget(roomId: string): import("./send.js").SendTarget {
+    return {
+      client: this.client,
+      roomId,
+      callbacks: this.callbacks,
+      outbox: this.outbox,
+    };
+  }
+
   /** Send a plain-text message with the full {@link SendOptions} surface. */
   sendMessage(roomId: string, text: string, options?: SendOptions): Promise<string> {
     return sendMessageWithOptions(
-      { client: this.client, roomId, callbacks: this.callbacks },
+      this.messageSendTarget(roomId),
       { text },
-      { ...this.effectiveMessageDefaults(), ...options },
+      { ...this.effectiveMessageDefaults(roomId), ...options },
     );
   }
 
   /** Send an HTML message (plain-text fallback derived automatically). */
   sendHtml(roomId: string, html: string, options?: SendOptions): Promise<string> {
     return sendMessageWithOptions(
-      { client: this.client, roomId, callbacks: this.callbacks },
+      this.messageSendTarget(roomId),
       { html },
-      { ...this.effectiveMessageDefaults(), ...options },
+      { ...this.effectiveMessageDefaults(roomId), ...options },
     );
   }
 
@@ -1330,14 +1351,12 @@ export class Bot {
     try {
       return await sendMessageWithOptions(
         {
-          client: this.client,
-          roomId: record.roomId,
-          callbacks: this.callbacks,
+          ...this.messageSendTarget(record.roomId),
           triggerEventId: record.messageId,
           callbackUserId: record.userId,
         },
         options?.html ? { html: options.html } : { text },
-        { ...this.effectiveMessageDefaults(), ...options },
+        { ...this.effectiveMessageDefaults(record.roomId), ...options },
       );
     } catch (err) {
       // Let the mini app retry rather than burning the query on a transient error.
@@ -1447,4 +1466,21 @@ export class Bot {
   static keyboard(): InlineKeyboard {
     return new InlineKeyboard();
   }
+}
+
+function coldStartKindForEvent(event: MatrixEvent): ColdStartUpdateKind {
+  if (event.type === HOST_CAPABILITIES_STATE_EVENT_TYPE) return "host_capabilities_state";
+  if (event.type === "m.reaction") return "reaction";
+  if (event.type === "m.room.redaction") return "redaction";
+  if (event.type === "m.room.member") return "membership";
+  if (event.type === "dev.aiomatrix.callback") return "callback_query";
+  if (event.type === "dev.aiomatrix.mini_app_data") return "mini_app_data";
+  if (typeof event.content === "object" && event.content && "m.relates_to" in event.content) {
+    const rel = (event.content as Record<string, unknown>)["m.relates_to"];
+    if (rel && typeof rel === "object" && (rel as { rel_type?: string }).rel_type === "m.replace") {
+      return "edited_message";
+    }
+  }
+  if (event.type === "m.room.message" || event.type === "m.sticker") return "message";
+  return "raw_event";
 }

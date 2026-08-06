@@ -1,6 +1,6 @@
 # Shared stores for multi-instance MiniApp HTTP
 
-Run **one** sync + crypto process per bot device. Scale MiniApp HTTP separately:
+Run one sync + crypto process per bot device. Scale MiniApp HTTP separately:
 same MiniApp secret, Redis for launch nonces and claimed callback/query tokens.
 
 ```bash
@@ -9,12 +9,8 @@ npm install redis
 
 ```ts
 import { createClient } from "redis";
-import {
-  Bot,
-  Dispatcher,
-  RedisStorage,
-  createRedisSharedTokenStores,
-} from "aiomatrix";
+import { Bot, Dispatcher } from "aiomatrix";
+import { RedisStorage, createRedisSharedTokenStores } from "aiomatrix/redis";
 
 const redis = createClient({ url: process.env.REDIS_URL });
 await redis.connect();
@@ -42,5 +38,4 @@ const server = bot.createMiniAppServer({ asyncNonceStore: stores.asyncNonceStore
 ```
 
 Single-host bots can use `createFileSharedTokenStores(storagePath)` from `aiomatrix`
-(already the default under `Bot.create`). aiomatrix has **no** redis dependency — the
-library works without it.
+(already the default under `Bot.create`).

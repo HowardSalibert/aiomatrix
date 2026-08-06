@@ -72,10 +72,9 @@ import { CALLBACK_ANSWER_EVENT_TYPE } from "aiomatrix";
 ## Callback aliases, binds, multi-instance
 
 - Short `!cb` ids / binds / used-tokens default to **files under `storagePath`** (`createFileSharedTokenStores`).
-- Multi-instance: `createRedisSharedTokenStores(redis)` from **`aiomatrix`** (no redis package dependency —
-  pass any `RedisLike` client). Alias resolve uses `getAsync` for strict cross-host short `!cb`.
+- Multi-instance: `createRedisSharedTokenStores(redis)` from `aiomatrix/redis`.
 - Ops hooks: `onSyncStale`, `onRateLimited`, `onStoreWarn`, optional `onMetric`.
-- Device GC: `relocateSession({ pruneOtherDevices: true })` or cautious `pruneOtherDevicesOnStart`
+- Device GC: `relocateSession({ pruneOtherDevices: true })` or `pruneOtherDevicesOnStart`
   (password required, idle ≥ 7 days by default).
 
 ## Schema contract (0.8+)

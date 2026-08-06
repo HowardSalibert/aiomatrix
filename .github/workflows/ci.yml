@@ -35,15 +35,13 @@ jobs:
       - run: npm run check:size
 
   appservice:
-    name: appservice (universal AS)
+    name: appservice pointer
     runs-on: ubuntu-latest
-    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v5
-      - uses: actions/setup-node@v5
-        with:
-          node-version: "24"
-      - run: npm run test:appservice
+      - name: packages/appservice points at standalone repo
+        run: |
+          grep -q 'FakeHoward/aiomatrix-appservice' packages/appservice/README.md
 
   # The native crypto bindings are an optionalDependency: importing `aiomatrix`
   # must work even where no prebuilt binary exists, as long as crypto is off.

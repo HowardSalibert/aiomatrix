@@ -10,6 +10,10 @@ import {
 import type { ParseMode, SendOptions } from "./types.js";
 import { createHash } from "node:crypto";
 import { escapeHtml } from "./util.js";
+import { finalizeAiomatrixContent } from "./content-validate.js";
+import type { OutboxStore } from "./outbox.js";
+import { RateLimitedError, RequestTimeoutError } from "./errors.js";
+import { MatrixApiError } from "./http.js";
 
 export interface MessageSource {
   /** Plain-text body. */
@@ -29,6 +33,10 @@ export interface SendTarget {
   threadRootId?: string | null;
   /** Restrict keyboard buttons to this user id. */
   callbackUserId?: string | null;
+  /** Optional outbox for transient send failures. */
+  outbox?: OutboxStore | null;
+  /** Called when schema validation warns (newer host fields). */
+  onContentWarn?: (warnings: string[]) => void;
 }
 
 /** Deterministic Matrix txn id from an opaque idempotency key (safe charset). */
@@ -102,6 +110,10 @@ export function buildMessageContent(
   }
 
   if (opts.extra) Object.assign(content, opts.extra);
+
+  const validated = finalizeAiomatrixContent(content);
+  if (validated.warnings.length > 0) target.onContentWarn?.(validated.warnings);
+
   return { content, tokens };
 }
 
@@ -211,14 +223,39 @@ export async function sendMessageWithOptions(
 ): Promise<string> {
   const { content, tokens } = buildMessageContent(source, options, target);
   const txnId = resolveTxnId(options);
-  const eventId = await target.client.sendEvent(
-    target.roomId,
-    "m.room.message",
-    content,
-    txnId ? { txnId } : undefined,
-  );
-  if (tokens.length > 0) target.callbacks?.bindMessage(tokens, eventId);
-  return eventId;
+  try {
+    const eventId = await target.client.sendEvent(
+      target.roomId,
+      "m.room.message",
+      content,
+      txnId ? { txnId } : undefined,
+    );
+    if (tokens.length > 0) target.callbacks?.bindMessage(tokens, eventId);
+    return eventId;
+  } catch (err) {
+    if (target.outbox && isTransientSendError(err)) {
+      await target.outbox.enqueue({
+        roomId: target.roomId,
+        eventType: "m.room.message",
+        content,
+        ...(txnId ? { txnId } : {}),
+      });
+    }
+    throw err;
+  }
+}
+
+function isTransientSendError(err: unknown): boolean {
+  if (err instanceof RateLimitedError) return true;
+  if (err instanceof RequestTimeoutError) return true;
+  if (err instanceof MatrixApiError) {
+    return err.status === 429 || err.status >= 500 || err.status === 0;
+  }
+  if (err instanceof TypeError) return true;
+  if (err instanceof Error && /fetch|network|ECONN|ETIMEDOUT|socket/i.test(err.message)) {
+    return true;
+  }
+  return false;
 }
 
 /**
