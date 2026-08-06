@@ -10,50 +10,83 @@ concurrency:
   group: ci-${{ github.ref }}
   cancel-in-progress: true
 
+# Intentionally no `uses: actions/*` steps. GitHub's action-download API has been
+# failing job setup with "Failed to resolve action download info" (503/500)
+# while git + nodejs.org still work. Checkout and Node are installed via shell.
+
 jobs:
   test:
     name: test (node ${{ matrix.node }} / ${{ matrix.os }})
     runs-on: ${{ matrix.os }}
-    # The suite finishes in seconds; anything longer means a handler or a sync
-    # loop is wedged. Native crypto requires Node >= 24 (matrix-sdk-crypto-nodejs).
-    timeout-minutes: 10
+    timeout-minutes: 15
     strategy:
       fail-fast: false
       matrix:
         os: [ubuntu-latest, windows-latest, macos-latest]
         node: ["24", "26"]
     steps:
-      - uses: actions/checkout@v5
-      - uses: actions/setup-node@v5
-        with:
-          node-version: ${{ matrix.node }}
-          cache: npm
-      - run: npm ci
-      - run: npm run build
-      - run: npm run test:only
-      - run: npm run check:api
-      - run: npm run check:size
+      - name: Checkout via git
+        shell: bash
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          auth="$(printf 'x-access-token:%s' "$GITHUB_TOKEN" | base64 | tr -d '\n')"
+          git init -q
+          git remote add origin "https://github.com/${GITHUB_REPOSITORY}.git"
+          git config --local http.https://github.com/.extraheader "AUTHORIZATION: basic ${auth}"
+          git fetch --depth 1 --quiet origin "${GITHUB_SHA}"
+          git checkout --force --quiet FETCH_HEAD
 
-  # One ubuntu job for pack / audit / no-native-crypto so a GitHub Actions
-  # "Failed to resolve action download info" blip does not fail three separate
-  # runners that each need their own checkout + setup-node download.
-  ubuntu-extras:
+      - name: Install Node ${{ matrix.node }}
+        shell: bash
+        env:
+          NODE_VERSION: ${{ matrix.node }}
+        run: bash .github/scripts/ci-install-node.sh
+
+      - name: Test
+        shell: bash
+        run: |
+          set -euo pipefail
+          npm ci
+          npm run build
+          npm run test:only
+          npm run check:api
+          npm run check:size
+
+  extras:
     name: pack / audit / no-native-crypto
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
-      - uses: actions/checkout@v5
-      - uses: actions/setup-node@v5
-        with:
-          node-version: "24"
-          cache: npm
-      - run: npm ci
-      - run: npm run build
-      - run: npm run test:appservice
-      - run: npm pack --dry-run
-      - run: npm run audit:deps
-      - name: import without native crypto
+      - name: Checkout via git
+        shell: bash
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
         run: |
+          set -euo pipefail
+          auth="$(printf 'x-access-token:%s' "$GITHUB_TOKEN" | base64 | tr -d '\n')"
+          git init -q
+          git remote add origin "https://github.com/${GITHUB_REPOSITORY}.git"
+          git config --local http.https://github.com/.extraheader "AUTHORIZATION: basic ${auth}"
+          git fetch --depth 1 --quiet origin "${GITHUB_SHA}"
+          git checkout --force --quiet FETCH_HEAD
+
+      - name: Install Node 24
+        shell: bash
+        env:
+          NODE_VERSION: "24"
+        run: bash .github/scripts/ci-install-node.sh
+
+      - name: Pack, audit, no-native-crypto
+        shell: bash
+        run: |
+          set -euo pipefail
+          npm ci
+          npm run build
+          npm run test:appservice
+          npm pack --dry-run
+          npm run audit:deps
           rm -rf node_modules/@matrix-org
           node -e "import('./dist/index.js').then(m => { if (typeof m.Bot?.create !== 'function') process.exit(1); })"
           node -e "
@@ -71,11 +104,29 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
-      - uses: actions/checkout@v5
-      - uses: actions/setup-node@v5
-        with:
-          node-version: "24"
-          cache: npm
-      - run: npm ci
-      - run: npm run build
-      - run: npm run test:live:ci
+      - name: Checkout via git
+        shell: bash
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          auth="$(printf 'x-access-token:%s' "$GITHUB_TOKEN" | base64 | tr -d '\n')"
+          git init -q
+          git remote add origin "https://github.com/${GITHUB_REPOSITORY}.git"
+          git config --local http.https://github.com/.extraheader "AUTHORIZATION: basic ${auth}"
+          git fetch --depth 1 --quiet origin "${GITHUB_SHA}"
+          git checkout --force --quiet FETCH_HEAD
+
+      - name: Install Node 24
+        shell: bash
+        env:
+          NODE_VERSION: "24"
+        run: bash .github/scripts/ci-install-node.sh
+
+      - name: Live Synapse suite
+        shell: bash
+        run: |
+          set -euo pipefail
+          npm ci
+          npm run build
+          npm run test:live:ci
