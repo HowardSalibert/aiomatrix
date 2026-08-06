@@ -1,18 +1,39 @@
 import type { Bot } from "./bot.js";
 import type { MatrixClient } from "./client.js";
-import { ConfigurationError, HandlerTimeoutError, MiniAppAuthError } from "./errors.js";
+import {
+  ConfigurationError,
+  HandlerTimeoutError,
+  InsufficientPowerError,
+  MiniAppAuthError,
+} from "./errors.js";
 import { FSMContext, type Storage } from "./fsm.js";
-import type { CallbackTokenStore, InlineKeyboard } from "./keyboards.js";
+import {
+  markdownFormattedOrUndefined,
+  sendMessageWithOptions,
+  editMessageWithOptions,
+  tokenizeKeyboard,
+  type SendTarget,
+} from "./send.js";
+import {
+  CALLBACK_ANSWER_EVENT_TYPE,
+  KEYBOARD_CONTENT_KEY,
+  PROGRESS_EVENT_TYPE,
+  TOAST_EVENT_TYPE,
+  type CallbackTokenStore,
+  type InlineKeyboard,
+} from "./keyboards.js";
+import type { ResolvedHostCapabilities } from "./host-capabilities.js";
 import type { Logger } from "./logger.js";
 import { readAttachmentFromContent } from "./media.js";
 import { buildMiniAppDataContent } from "./miniapp/events.js";
 import type { Membership, PowerLevels } from "./room-cache.js";
-import { markdownFormattedOrUndefined, sendMessageWithOptions, type SendTarget } from "./send.js";
 import type {
   AnyContext,
   BaseContext,
   CallbackContext,
   ContextData,
+  ContextFileOptions,
+  EphemeralContext,
   MatrixEvent,
   MatrixMessageEvent,
   MembershipContext,
@@ -28,6 +49,7 @@ import type {
   UpdateType,
   FsmStrategy,
   MessageDefaults,
+  WaitForOptions,
 } from "./types.js";
 import type { CommandObject } from "./commands.js";
 import { isPlainObject, readString } from "./util.js";
@@ -213,6 +235,170 @@ abstract class ContextBase<T extends UpdateType> implements BaseContext<T> {
     if (!this.eventId) return;
     await this.deps.client.sendReadReceipt(this.roomId, this.eventId);
   }
+
+  /**
+   * Aware-host ephemeral toast (`dev.aiomatrix.toast`). Stock profile falls
+   * back to a notice unless `forceEvent` is set.
+   */
+  async toast(
+    text: string,
+    options?: { alert?: boolean; forceEvent?: boolean; userId?: string },
+  ): Promise<string> {
+    const useEvent =
+      options?.forceEvent === true ||
+      this.deps.bot.clientProfile === "aware" ||
+      this.hostCapabilities().toast;
+    if (useEvent) {
+      return this.deps.client.sendEvent(this.roomId, TOAST_EVENT_TYPE, {
+        text,
+        alert: options?.alert === true,
+        user_id: options?.userId ?? this.senderId,
+      });
+    }
+    return this.answer(text, { notice: !options?.alert });
+  }
+
+  /**
+   * Aware-host progress indicator (`dev.aiomatrix.progress`).
+   * `percent` null clears / completes the indicator on aware hosts.
+   */
+  async progress(
+    text: string,
+    options?: { percent?: number | null; forceEvent?: boolean },
+  ): Promise<string> {
+    const useEvent =
+      options?.forceEvent === true ||
+      this.deps.bot.clientProfile === "aware" ||
+      this.hostCapabilities().progress;
+    if (useEvent) {
+      return this.deps.client.sendEvent(this.roomId, PROGRESS_EVENT_TYPE, {
+        text,
+        percent: options?.percent ?? null,
+        user_id: this.senderId,
+      });
+    }
+    return this.answer(text, { notice: true });
+  }
+
+  /** Host capabilities from `dev.aiomatrix.host` room state (bot cache). */
+  hostCapabilities(): ResolvedHostCapabilities {
+    return this.deps.bot.getHostCapabilities(this.roomId);
+  }
+
+  waitFor(
+    filter: (ctx: AnyContext) => boolean | Promise<boolean>,
+    options?: WaitForOptions,
+  ): Promise<AnyContext> {
+    return this.deps.bot.waitFor(filter, {
+      timeoutMs: options?.timeoutMs,
+      roomId: options?.roomId === undefined ? this.roomId : options.roomId,
+      senderId: options?.senderId === undefined ? this.senderId : options.senderId,
+    });
+  }
+
+  answerFile(data: Uint8Array, options: ContextFileOptions): Promise<string> {
+    return this.sendFileInternal(data, options, false);
+  }
+
+  replyPhoto(data: Uint8Array, options: ContextFileOptions): Promise<string> {
+    return this.sendFileInternal(
+      data,
+      { ...options, msgtype: options.msgtype ?? "m.image" },
+      true,
+    );
+  }
+
+  replyDocument(data: Uint8Array, options: ContextFileOptions): Promise<string> {
+    return this.sendFileInternal(
+      data,
+      { ...options, msgtype: options.msgtype ?? "m.file" },
+      true,
+    );
+  }
+
+  private async sendFileInternal(
+    data: Uint8Array,
+    options: ContextFileOptions,
+    reply: boolean,
+  ): Promise<string> {
+    const target = this.sendTarget();
+    const minted: string[] = [];
+    const extra: Record<string, unknown> = { ...(options.extra ?? {}) };
+    const replyTo =
+      reply || options.replyTo === true
+        ? this.eventId || null
+        : typeof options.replyTo === "string"
+          ? options.replyTo
+          : null;
+    if (replyTo) {
+      extra["m.relates_to"] = { "m.in_reply_to": { event_id: replyTo } };
+    }
+    if (options.keyboard) {
+      extra[KEYBOARD_CONTENT_KEY] = tokenizeKeyboard(options.keyboard, target, minted);
+    }
+    const eventId = await this.deps.client.sendFile(this.roomId, data, {
+      filename: options.filename,
+      ...(options.contentType !== undefined ? { contentType: options.contentType } : {}),
+      ...(options.msgtype !== undefined ? { msgtype: options.msgtype } : {}),
+      ...(options.caption !== undefined ? { caption: options.caption } : {}),
+      ...(options.width !== undefined ? { width: options.width } : {}),
+      ...(options.height !== undefined ? { height: options.height } : {}),
+      ...(options.durationMs !== undefined ? { durationMs: options.durationMs } : {}),
+      extra,
+    });
+    if (minted.length > 0) this.deps.callbacks.bindMessage(minted, eventId);
+    return eventId;
+  }
+
+  async kick(userId: string, reason?: string): Promise<void> {
+    this.assertAdminPower("kick", "kick");
+    await this.deps.client.kickUser(this.roomId, userId, reason);
+  }
+
+  async ban(userId: string, reason?: string): Promise<void> {
+    this.assertAdminPower("ban", "ban");
+    await this.deps.client.banUser(this.roomId, userId, reason);
+  }
+
+  async invite(userId: string, reason?: string): Promise<void> {
+    this.assertAdminPower("invite", "invite");
+    await this.deps.client.inviteUser(this.roomId, userId, reason);
+  }
+
+  async setPower(userId: string, level: number): Promise<string> {
+    this.assertAdminPower("set_power", "events_default", true);
+    const selfLevel = this.powerLevelOf(this.deps.bot.selfId);
+    const targetLevel = this.powerLevelOf(userId);
+    if (userId !== this.deps.bot.selfId && targetLevel >= selfLevel) {
+      throw new InsufficientPowerError("set_power", targetLevel + 1, selfLevel, this.roomId);
+    }
+    if (level >= selfLevel && userId !== this.deps.bot.selfId) {
+      throw new InsufficientPowerError("set_power", level + 1, selfLevel, this.roomId);
+    }
+    return this.deps.client.setPowerLevel(this.roomId, userId, level);
+  }
+
+  /**
+   * Gate room-admin helpers on the bot's own power — never on the triggering
+   * sender — so handler authors cannot escalate via a high-power user message.
+   */
+  protected assertAdminPower(
+    action: "kick" | "ban" | "invite" | "set_power" | "redact",
+    field: "kick" | "ban" | "invite" | "events_default",
+    asState = false,
+  ): void {
+    this.assertWritable();
+    const levels = this.powerLevels();
+    const required =
+      field === "events_default"
+        ? this.deps.client.rooms.requiredPowerFor(this.roomId, "m.room.power_levels", true)
+        : (levels[field] ?? 50);
+    const actual = this.powerLevelOf(this.deps.bot.selfId);
+    if (actual < required) {
+      throw new InsufficientPowerError(action, required, actual, this.roomId);
+    }
+    void asState;
+  }
 }
 
 class MessageContextImpl
@@ -299,18 +485,36 @@ class MessageContextImpl
   }
 
   editMessage(eventId: string, text: string, options?: SendOptions): Promise<string> {
-    const opts = this.withDefaults(options) ?? {};
-    const formatted =
-      opts.parseMode === "markdown"
-        ? markdownFormattedOrUndefined(text)
-        : opts.parseMode === "html"
-          ? text
-          : undefined;
-    return this.deps.client.editMessage(this.roomId, eventId, {
-      body: text,
-      ...(formatted ? { formattedBody: formatted } : {}),
-      ...(opts.notice ? { notice: true } : {}),
-    });
+    return editMessageWithOptions(
+      this.sendTarget(),
+      eventId,
+      { text },
+      this.withDefaults(options),
+    );
+  }
+
+  /** Alias of {@link editMessage} with full {@link SendOptions} (keyboard, parseMode). */
+  edit(eventId: string, text: string, options?: SendOptions): Promise<string> {
+    return this.editMessage(eventId, text, options);
+  }
+
+  async getRepliedMessage(): Promise<MessageContext | null> {
+    if (!this.replyToEventId) return null;
+    try {
+      const raw = await this.deps.client.getEvent(this.roomId, this.replyToEventId);
+      const event = raw as MatrixMessageEvent;
+      if (readString(event, "type") !== "m.room.message") return null;
+      if (!readString(event.content, "msgtype")) return null;
+      const senderId = typeof event.sender === "string" ? event.sender : "";
+      return new MessageContextImpl(this.deps, {
+        roomId: this.roomId,
+        event,
+        senderId,
+        isDirect: this.isDirect,
+      });
+    } catch {
+      return null;
+    }
   }
 }
 
@@ -407,6 +611,7 @@ class CallbackContextImpl extends ContextBase<"callback_query"> implements Callb
   async answerCallback(options?: {
     text?: string;
     alert?: boolean;
+    timeline?: boolean;
     editText?: string;
     editHtml?: string;
     keyboard?: InlineKeyboard | null;
@@ -435,15 +640,28 @@ class CallbackContextImpl extends ContextBase<"callback_query"> implements Callb
       }
     }
     if (options?.text) {
-      // Matrix has no ephemeral toast, so an acknowledgement is a notice reply.
-      await sendMessageWithOptions(
-        this.sendTarget(),
-        { text: options.text },
-        this.withDefaults({
-          notice: !options.alert,
-          replyTo: this.messageEventId || undefined,
-        }),
-      );
+      const useToast =
+        options.timeline !== true &&
+        (this.deps.bot.clientProfile === "aware" || this.hostCapabilities().toast);
+      if (useToast) {
+        await this.deps.client.sendEvent(this.roomId, CALLBACK_ANSWER_EVENT_TYPE, {
+          text: options.text,
+          alert: options.alert === true,
+          query_id: this.queryId,
+          user_id: this.senderId,
+          message_id: this.messageEventId,
+        });
+      } else {
+        // Stock clients: Matrix has no ephemeral toast — notice reply.
+        await sendMessageWithOptions(
+          this.sendTarget(),
+          { text: options.text },
+          this.withDefaults({
+            notice: !options.alert,
+            replyTo: this.messageEventId || undefined,
+          }),
+        );
+      }
     }
   }
 
@@ -452,17 +670,7 @@ class CallbackContextImpl extends ContextBase<"callback_query"> implements Callb
     if (!this.messageEventId) {
       return sendMessageWithOptions(this.sendTarget(), { text }, opts);
     }
-    const formatted =
-      opts?.parseMode === "markdown"
-        ? markdownFormattedOrUndefined(text)
-        : opts?.parseMode === "html"
-          ? text
-          : undefined;
-    return this.deps.client.editMessage(this.roomId, this.messageEventId, {
-      body: text,
-      ...(formatted ? { formattedBody: formatted } : {}),
-      ...(opts?.notice ? { notice: true } : {}),
-    });
+    return editMessageWithOptions(this.sendTarget(), this.messageEventId, { text }, opts);
   }
 }
 
@@ -526,6 +734,25 @@ class PollResponseContextImpl extends ContextBase<"poll_response"> implements Po
         : {};
     this.answerIds = Array.isArray(response.answers)
       ? response.answers.filter((id): id is string => typeof id === "string")
+      : [];
+  }
+}
+
+class EphemeralContextImpl extends ContextBase<"ephemeral"> implements EphemeralContext {
+  readonly updateType = "ephemeral" as const;
+  readonly eventType: string;
+  readonly isTyping: boolean;
+  readonly isReceipt: boolean;
+  readonly typingUserIds: string[];
+
+  constructor(deps: ContextDeps, init: ContextInit) {
+    super(deps, init);
+    this.eventType = readString(init.event, "type") ?? "";
+    this.isTyping = this.eventType === "m.typing";
+    this.isReceipt = this.eventType === "m.receipt";
+    const content = init.event.content ?? {};
+    this.typingUserIds = Array.isArray(content.user_ids)
+      ? content.user_ids.filter((id): id is string => typeof id === "string")
       : [];
   }
 }
@@ -643,6 +870,17 @@ export class ContextFactory {
       senderId,
       isDirect: readString(event.content, "is_direct") === "true" || event.content?.is_direct === true,
       updateType: "invite",
+    });
+  }
+
+  /** Build a context for an ephemeral event (typing/receipt). */
+  fromEphemeral(roomId: string, event: MatrixEvent): EphemeralContext {
+    const senderId = typeof event.sender === "string" ? event.sender : "";
+    return new EphemeralContextImpl(this.deps, {
+      roomId,
+      event,
+      senderId,
+      isDirect: this.deps.client.rooms.isDirect(roomId),
     });
   }
 

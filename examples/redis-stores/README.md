@@ -9,8 +9,12 @@ npm install redis
 
 ```ts
 import { createClient } from "redis";
-import { Bot } from "aiomatrix";
-import { createRedisSharedTokenStores } from "./stores.js";
+import {
+  Bot,
+  Dispatcher,
+  RedisStorage,
+  createRedisSharedTokenStores,
+} from "aiomatrix";
 
 const redis = createClient({ url: process.env.REDIS_URL });
 await redis.connect();
@@ -31,12 +35,12 @@ const bot = await Bot.create({
   callbackBindStore: stores.callbackBindStore,
 });
 
+const dp = new Dispatcher({ storage: new RedisStorage(redis) });
+
 // Only the syncing process calls bot.run().
 const server = bot.createMiniAppServer({ asyncNonceStore: stores.asyncNonceStore });
 ```
 
 Single-host bots can use `createFileSharedTokenStores(storagePath)` from `aiomatrix`
-(already the default under `Bot.create`).
-
-`/auth` uses `authenticateAsync` when `asyncNonceStore` or `resolveRoomAuth` is set.
-Callback / query claim uses awaited Redis `SET NX` via `resolveAsync` / `claimAsync`.
+(already the default under `Bot.create`). aiomatrix has **no** redis dependency — the
+library works without it.

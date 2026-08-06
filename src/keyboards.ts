@@ -12,6 +12,10 @@ import { escapeHtml, isPlainObject, randomId, readString, timingSafeEqualStrings
 export const KEYBOARD_CONTENT_KEY = "dev.aiomatrix.keyboard";
 /** Room event type sent by a client when an inline button is pressed. */
 export const CALLBACK_EVENT_TYPE = "dev.aiomatrix.callback";
+/** Toast / progress events for aware hosts (not timeline notices). */
+export const TOAST_EVENT_TYPE = "dev.aiomatrix.toast";
+export const PROGRESS_EVENT_TYPE = "dev.aiomatrix.progress";
+export const CALLBACK_ANSWER_EVENT_TYPE = "dev.aiomatrix.callback_answer";
 /** Text-command fallback so keyboards work in clients with no button support. */
 export const CALLBACK_FALLBACK_COMMAND = "cb";
 export const KEYBOARD_SCHEMA_VERSION = 1;
@@ -229,6 +233,54 @@ export class InlineKeyboard {
     const kb = new InlineKeyboard();
     for (const [label, data] of entries) kb.text(label, data);
     return kb.adjust(columns);
+  }
+
+  /**
+   * Paginated callback grid with prev/next controls.
+   * `dataForItem(item, absoluteIndex)` must return stable callback data.
+   * Nav buttons use `${navPrefix}:prev:${page}` / `${navPrefix}:next:${page}`.
+   */
+  static paginate<T>(
+    items: readonly T[],
+    options: {
+      page: number;
+      pageSize?: number;
+      columns?: number;
+      dataForItem: (item: T, index: number) => string;
+      labelForItem?: (item: T, index: number) => string;
+      navPrefix?: string;
+      prevLabel?: string;
+      nextLabel?: string;
+      /** Include a page indicator button (non-nav). Default true. */
+      showPageLabel?: boolean;
+    },
+  ): InlineKeyboard {
+    const pageSize = Math.max(1, options.pageSize ?? 8);
+    const columns = Math.max(1, options.columns ?? 1);
+    const totalPages = Math.max(1, Math.ceil(items.length / pageSize));
+    const page = Math.min(Math.max(0, options.page), totalPages - 1);
+    const start = page * pageSize;
+    const slice = items.slice(start, start + pageSize);
+    const kb = new InlineKeyboard();
+    const labelOf = options.labelForItem ?? ((item: T) => String(item));
+    for (let i = 0; i < slice.length; i += 1) {
+      const item = slice[i]!;
+      const abs = start + i;
+      kb.text(labelOf(item, abs), options.dataForItem(item, abs));
+    }
+    kb.adjust(columns);
+    const navPrefix = options.navPrefix ?? "page";
+    const prevLabel = options.prevLabel ?? "‹";
+    const nextLabel = options.nextLabel ?? "›";
+    if (totalPages > 1) {
+      kb.row();
+      if (page > 0) kb.text(prevLabel, `${navPrefix}:prev:${page}`);
+      if (options.showPageLabel !== false) {
+        kb.text(`${page + 1}/${totalPages}`, `${navPrefix}:noop:${page}`);
+      }
+      if (page < totalPages - 1) kb.text(nextLabel, `${navPrefix}:next:${page}`);
+    }
+    return kb;
   }
 }
 
@@ -608,6 +660,24 @@ export class SignedCallbackRegistry implements CallbackTokenStore {
     return token;
   }
 
+  /**
+   * Like {@link canonicalize}, but awaits {@link TtlStringMap.getAsync} on miss
+   * so Redis-backed aliases resolve correctly across hosts.
+   */
+  private async canonicalizeAsync(token: string): Promise<string> {
+    const sync = this.canonicalize(token);
+    if (sync !== token || this.aliases.has(token)) return sync;
+    const getAsync = this.aliasStore.getAsync?.bind(this.aliasStore);
+    if (!getAsync) return token;
+    const fromStore = await getAsync(aliasKey(token));
+    if (fromStore) {
+      this.aliases.set(token, fromStore);
+      this.aliasOf.set(fromStore, token);
+      return fromStore;
+    }
+    return token;
+  }
+
   private rememberAlias(alias: string, token: string, ttlMs: number): void {
     this.aliases.set(alias, token);
     this.aliasOf.set(token, alias);
@@ -676,7 +746,8 @@ export class SignedCallbackRegistry implements CallbackTokenStore {
     userId?: string,
     now = Date.now(),
   ): Promise<CallbackTokenRecord | null> {
-    const signed = this.canonicalize(token);
+    const signed = await this.canonicalizeAsync(token);
+    // peek() re-canonicalizes sync-only; pass the already-resolved signed token.
     const record = this.peek(signed, now);
     if (!record) return null;
     if (record.userId && userId && record.userId !== userId) return null;

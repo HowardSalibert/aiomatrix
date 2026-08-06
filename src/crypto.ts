@@ -27,7 +27,12 @@ import {
   parseToDeviceRecipients,
   resolveEncryptionSharePolicy,
   shouldRotateEveryMessage,
+  type ResolvedEncryptionSharePolicy,
 } from "./crypto-policy.js";
+import {
+  createCryptoSoftBudget,
+  type CryptoSoftBudget,
+} from "./crypto-budget.js";
 import { RoomKeyWithheldError } from "./errors.js";
 import { MatrixApiError, type MatrixHttp } from "./http.js";
 import { createDefaultLogger, type Logger } from "./logger.js";
@@ -37,7 +42,7 @@ import { AsyncLock, LruCache, fingerprintSet, isPlainObject, readString } from "
 
 /** Map legacy boolean share flags onto crypto-nodejs 0.6 `CollectStrategy`. */
 export function collectStrategyForPolicy(
-  policy: Required<EncryptionSharePolicy>,
+  policy: ResolvedEncryptionSharePolicy,
 ): CollectStrategy {
   if (policy.onlyAllowTrustedDevices) return CollectStrategy.OnlyTrustedDevices;
   if (policy.errorOnVerifiedUserProblem) return CollectStrategy.ErrorOnVerifiedUserProblem;
@@ -124,10 +129,11 @@ const MAX_DECRYPT_ATTEMPTS = 6;
 export class CryptoEngine {
   readonly userId: string;
   readonly clientDeviceId: string;
-  readonly sharePolicy: Required<EncryptionSharePolicy>;
+  readonly sharePolicy: ResolvedEncryptionSharePolicy;
   private readonly http: MatrixHttp;
   private readonly machine: OlmMachine;
   private readonly onCryptoLog: ((event: CryptoLogEvent) => void) | null;
+  private readonly softBudget: CryptoSoftBudget | null;
   private readonly logger: Logger;
   private readonly lock = new AsyncLock();
   private _isReady = false;
@@ -150,9 +156,10 @@ export class CryptoEngine {
     http: MatrixHttp,
     userId: string,
     deviceId: string,
-    sharePolicy: Required<EncryptionSharePolicy>,
+    sharePolicy: ResolvedEncryptionSharePolicy,
     onCryptoLog: ((event: CryptoLogEvent) => void) | null,
     logger: Logger,
+    softBudget: CryptoSoftBudget | null,
   ) {
     this.machine = machine;
     this.http = http;
@@ -161,6 +168,7 @@ export class CryptoEngine {
     this.sharePolicy = sharePolicy;
     this.onCryptoLog = onCryptoLog;
     this.logger = logger;
+    this.softBudget = softBudget;
   }
 
   get isReady(): boolean {
@@ -203,6 +211,21 @@ export class CryptoEngine {
       resolveEncryptionSharePolicy(options.encryption),
       options.onCryptoLog ?? null,
       logger,
+      createCryptoSoftBudget(
+        options.encryption?.softBudget
+          ? {
+              ...options.encryption.softBudget,
+              onSoftBudget: (info) => {
+                options.encryption?.softBudget?.onSoftBudget?.(info);
+                options.onCryptoLog?.({
+                  type: "warn",
+                  message: `crypto soft budget: delaying ${info.kind} by ${info.delayMs}ms (${info.count}/${info.limit})`,
+                  detail: info,
+                });
+              },
+            }
+          : undefined,
+      ),
     );
     if (options.keyBackup) {
       await engine.setupKeyBackup(options.keyBackupRecoveryKey).catch((err) => {
@@ -331,6 +354,7 @@ export class CryptoEngine {
         await this.postAndMark(request, "/_matrix/client/v3/keys/upload", RequestType.KeysUpload);
         break;
       case RequestType.KeysQuery:
+        await this.softBudget?.beforeKeysQuery();
         await this.postAndMark(request, "/_matrix/client/v3/keys/query", RequestType.KeysQuery);
         break;
       case RequestType.KeysClaim:
@@ -622,6 +646,8 @@ export class CryptoEngine {
 
       const policy = this.sharePolicy;
       const rotateNow = shouldRotateEveryMessage(policy, peers.length);
+
+      await this.softBudget?.beforeShareRoomKey();
 
       // Refresh identity keys before share. When rotating every message, query
       // all peers (peer wipe / same device_id must not use a stale KeysQuery

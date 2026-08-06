@@ -62,6 +62,8 @@ export interface ClientEventMeta {
 export interface ClientHandlers {
   /** Every timeline event (already decrypted), including the bot's own echoes. */
   onRoomEvent?: (roomId: string, event: MatrixEvent, meta: ClientEventMeta) => void;
+  /** Ephemeral events (typing/receipt) when `receiveEphemeral` is on. */
+  onEphemeral?: (roomId: string, event: MatrixEvent) => void;
   /** Decrypted (or plaintext) to-device events. */
   onToDevice?: (event: MatrixEvent) => void;
   /** Room invite, with the stripped invite state. */
@@ -1189,6 +1191,18 @@ export class MatrixClient {
     const timeline = room.timeline?.events ?? [];
     for (const event of timeline) applyEvent(event, false);
 
+    // Aware-host capability state must be visible even when it only appears in
+    // the state block (not the timeline).
+    for (const event of room.state?.events ?? []) {
+      if (event.type === "dev.aiomatrix.host") {
+        this.handlers.onRoomEvent?.(roomId, event as MatrixEvent, {
+          historical: isBootstrap,
+          decrypted: false,
+          lateDecrypt: false,
+        });
+      }
+    }
+
     if (this.crypto) {
       if (encryptionAppeared || (isNewRoom && this.rooms.isEncrypted(roomId))) {
         await this.trackRoomMembers(roomId);
@@ -1203,6 +1217,12 @@ export class MatrixClient {
 
     for (const event of timeline) {
       await this.emitTimelineEvent(roomId, event, gapped);
+    }
+
+    if (this.options.receiveEphemeral === true) {
+      for (const event of room.ephemeral?.events ?? []) {
+        this.handlers.onEphemeral?.(roomId, event as MatrixEvent);
+      }
     }
   }
 

@@ -91,6 +91,12 @@ export interface TtlStringMap {
   get(key: string): string | undefined;
   set(key: string, value: string, ttlMs: number): void;
   delete(key: string): void;
+  /**
+   * Optional async read for strict multi-host alias resolve (Redis).
+   * When present, {@link import("./keyboards.js").SignedCallbackRegistry.resolveAsync}
+   * awaits it on a sync miss.
+   */
+  getAsync?(key: string): Promise<string | undefined>;
 }
 
 /** Bounded in-memory {@link TtlStringMap}. */

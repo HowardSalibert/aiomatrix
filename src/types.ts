@@ -51,6 +51,7 @@ export type UpdateType =
   | "callback_query"
   | "mini_app_data"
   | "poll_response"
+  | "ephemeral"
   | "to_device"
   | "raw_event";
 
@@ -92,6 +93,13 @@ export interface SendOptions {
   extra?: Record<string, unknown>;
   /** Do not fall back to plain text when HTML is provided. */
   htmlOnly?: boolean;
+  /**
+   * Stable idempotency key → deterministic Matrix `txnId` so retries after
+   * timeout do not double-post. Prefer opaque ids (e.g. `${roomId}:${cmd}:${eventId}`).
+   */
+  idempotencyKey?: string;
+  /** Raw Matrix transaction id (overrides {@link idempotencyKey} hashing). */
+  txnId?: string;
 }
 
 /** Bot-wide defaults for {@link SendOptions}. */
@@ -158,6 +166,74 @@ export interface BaseContext<T extends UpdateType = UpdateType> {
   deleteMessage(reason?: string): Promise<string>;
   /** Mark the triggering event as read. */
   markRead(): Promise<void>;
+  /** Aware toast (`dev.aiomatrix.toast`) or notice fallback. */
+  toast(
+    text: string,
+    options?: { alert?: boolean; forceEvent?: boolean; userId?: string },
+  ): Promise<string>;
+  /** Aware progress (`dev.aiomatrix.progress`) or notice fallback. */
+  progress(
+    text: string,
+    options?: { percent?: number | null; forceEvent?: boolean },
+  ): Promise<string>;
+  /** Host capability snapshot for this room. */
+  hostCapabilities(): import("./host-capabilities.js").ResolvedHostCapabilities;
+  /**
+   * Wait for the next matching update (same room by default). The matching
+   * update is consumed and not delivered to routers.
+   */
+  waitFor(
+    filter: (ctx: AnyContext) => boolean | Promise<boolean>,
+    options?: WaitForOptions,
+  ): Promise<AnyContext>;
+  /** Upload and send a file into the room. */
+  answerFile(
+    data: Uint8Array,
+    options: ContextFileOptions,
+  ): Promise<string>;
+  /** Send an image as a reply to the triggering event. */
+  replyPhoto(data: Uint8Array, options: ContextFileOptions): Promise<string>;
+  /** Send a document/file as a reply to the triggering event. */
+  replyDocument(data: Uint8Array, options: ContextFileOptions): Promise<string>;
+  /**
+   * Kick a user. Refuses when the bot lacks kick power
+   * ({@link import("./errors.js").InsufficientPowerError}).
+   */
+  kick(userId: string, reason?: string): Promise<void>;
+  /** Ban a user. Power-gated like {@link kick}. */
+  ban(userId: string, reason?: string): Promise<void>;
+  /** Invite a user. Power-gated like {@link kick}. */
+  invite(userId: string, reason?: string): Promise<void>;
+  /**
+   * Set a user's power level. Refuses when the bot cannot send
+   * `m.room.power_levels`, or when targeting a user at/above the bot's level
+   * (unless the bot is the room creator with sufficient rights).
+   */
+  setPower(userId: string, level: number): Promise<string>;
+}
+
+export interface WaitForOptions {
+  /** Default 60_000. */
+  timeoutMs?: number;
+  /** Default: current room. Pass `null` to match any room. */
+  roomId?: string | null;
+  /** Default: current sender. Pass `null` to match any sender. */
+  senderId?: string | null;
+}
+
+export interface ContextFileOptions {
+  filename: string;
+  contentType?: string;
+  msgtype?: "m.file" | "m.image" | "m.audio" | "m.video";
+  caption?: string;
+  width?: number;
+  height?: number;
+  durationMs?: number;
+  keyboard?: InlineKeyboard;
+  replyTo?: string | boolean;
+  thread?: string | boolean;
+  notice?: boolean;
+  extra?: Record<string, unknown>;
 }
 
 /** Context for `m.room.message` (and decrypted equivalents). */
@@ -189,8 +265,15 @@ export interface MessageContext extends BaseContext<"message" | "edited_message"
   readonly attachment: MessageAttachment | null;
   /** Download the attachment bytes (decrypting when necessary). */
   downloadAttachment(): Promise<Uint8Array>;
-  /** Edit a message previously sent by this bot. */
+  /** Edit a message previously sent by this bot (supports keyboard). */
   editMessage(eventId: string, text: string, options?: SendOptions): Promise<string>;
+  /** Alias of {@link editMessage}. */
+  edit(eventId: string, text: string, options?: SendOptions): Promise<string>;
+  /**
+   * Fetch the event this message replies to (rich reply), or `null`.
+   * Returns a {@link MessageContext} when the target is an `m.room.message`.
+   */
+  getRepliedMessage(): Promise<MessageContext | null>;
 }
 
 export interface MessageAttachment {
@@ -245,6 +328,11 @@ export interface CallbackContext extends BaseContext<"callback_query"> {
   answerCallback(options?: {
     text?: string;
     alert?: boolean;
+    /**
+     * Force a timeline notice even on aware hosts. Default false — aware
+     * profile emits {@link import("./keyboards.js").CALLBACK_ANSWER_EVENT_TYPE}.
+     */
+    timeline?: boolean;
     /** Replace the keyboard message text. */
     editText?: string;
     editHtml?: string;
@@ -279,6 +367,17 @@ export interface PollResponseContext extends BaseContext<"poll_response"> {
   readonly answerIds: string[];
 }
 
+/** Typing / receipt / other ephemeral sync events (`receiveEphemeral: true`). */
+export interface EphemeralContext extends BaseContext<"ephemeral"> {
+  readonly eventType: string;
+  /** True for `m.typing`. */
+  readonly isTyping: boolean;
+  /** True for `m.receipt`. */
+  readonly isReceipt: boolean;
+  /** User ids currently typing (when `isTyping`). */
+  readonly typingUserIds: string[];
+}
+
 export interface ToDeviceContext extends BaseContext<"to_device"> {
   readonly eventType: string;
   readonly toDeviceContent: Record<string, unknown>;
@@ -297,6 +396,7 @@ export type AnyContext =
   | CallbackContext
   | MiniAppDataContext
   | PollResponseContext
+  | EphemeralContext
   | ToDeviceContext
   | RawEventContext;
 
@@ -358,6 +458,12 @@ export interface EncryptionSharePolicy {
   rotationPeriodMs?: number;
   /** Re-share when a peer's device list changes. Default true. */
   reshareOnDeviceChange?: boolean;
+  /**
+   * Soft rate budget for Megolm share / keys-query. Opt-in. When exceeded,
+   * outbound crypto work is delayed (never hard-failed, never auto-prunes
+   * devices). See {@link import("./crypto-budget.js").CryptoSoftBudgetOptions}.
+   */
+  softBudget?: import("./crypto-budget.js").CryptoSoftBudgetOptions;
 }
 
 /** Structured crypto lifecycle events for bot authors. */
@@ -370,7 +476,7 @@ export type CryptoLogEvent =
       peers: string[];
       /** Actual `m.room_key` to-device targets as `userId/deviceId`. */
       recipients: string[];
-      policy: Required<EncryptionSharePolicy>;
+      policy: Required<Omit<EncryptionSharePolicy, "softBudget">>;
     }
   | { type: "withheld_detail"; roomId: string; eventType: string; bodyPreview: string }
   | { type: "peer_keys_missing"; roomId: string; peers: string[] }
@@ -598,6 +704,26 @@ export interface BotCreateOptions {
     retried: boolean;
     error?: unknown;
   }) => void;
+  /**
+   * Optional metrics sink (Prometheus/OTel adapters). Never required — omitted
+   * means zero metric overhead.
+   */
+  onMetric?: import("./metrics.js").MetricHandler;
+  /**
+   * After a successful start, prune other devices on this account.
+   * **Default off.** When enabled, requires `password` for UIA and defaults to
+   * only deleting devices idle for 7+ days (`olderThanMs`) so active sessions
+   * are not wiped. See {@link import("./login.js").PruneOtherDevicesOptions}.
+   */
+  pruneOtherDevicesOnStart?:
+    | boolean
+    | {
+        /** Default 7 days. Set `0` only if you intentionally prune all others. */
+        olderThanMs?: number;
+        limit?: number;
+        /** Schedule recurring prune. Default off. Min 1 hour when set. */
+        scheduleIntervalMs?: number;
+      };
 }
 
 export interface DispatcherOptions {

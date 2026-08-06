@@ -5,6 +5,7 @@ import {
   type CommandSpec,
 } from "./commands.js";
 import type {
+  AnyContext,
   BaseContext,
   CallbackContext,
   Filter,
@@ -14,6 +15,10 @@ import type {
   ReactionContext,
 } from "./types.js";
 import { isPlainObject, readString } from "./util.js";
+import {
+  parseCommandArgs,
+  type CommandArgsSchema,
+} from "./command-args.js";
 
 /** A command filter also carries its spec so `/help` can be generated. */
 export interface CommandFilter extends Filter<MessageContext> {
@@ -30,6 +35,11 @@ export interface CommandOptions extends Omit<CommandSpec, "name" | "aliases"> {
   allowBare?: boolean | "direct";
   /** Require the command to be addressed at this bot in group rooms. */
   requireMention?: boolean;
+  /**
+   * Typed argument schema ({@link parseCommandArgs}). On match, parsed values
+   * are stored in `ctx.data.args` (and `ctx.data.commandArgs`).
+   */
+  argsSchema?: CommandArgsSchema;
 }
 
 /**
@@ -74,6 +84,15 @@ export function Command(
     ctx.command = parsed;
     ctx.commandName = parsed.command;
     ctx.commandArgs = parsed.args;
+    if (options.argsSchema) {
+      try {
+        const typed = parseCommandArgs(parsed.args, options.argsSchema);
+        ctx.data.args = typed;
+        ctx.data.commandArgs = typed;
+      } catch {
+        return false;
+      }
+    }
     return true;
   }) as CommandFilter;
 
@@ -311,6 +330,9 @@ export const F = {
       const set = new Set(values);
       return (ctx) => set.has(ctx.callbackData);
     },
+    equals(value: string): Filter<CallbackContext> {
+      return (ctx) => ctx.callbackData === value;
+    },
     startsWith(prefix: string): Filter<CallbackContext> {
       return (ctx) => ctx.callbackData.startsWith(prefix);
     },
@@ -323,6 +345,41 @@ export const F = {
         return true;
       };
     },
+  },
+
+  /** Alias of {@link F.callback} for MagicFilter-style `F.callbackData.equals`. */
+  callbackData: {
+    equals(value: string): Filter<CallbackContext> {
+      return (ctx) => ctx.callbackData === value;
+    },
+    startsWith(prefix: string): Filter<CallbackContext> {
+      return (ctx) => ctx.callbackData.startsWith(prefix);
+    },
+    in(values: string[]): Filter<CallbackContext> {
+      const set = new Set(values);
+      return (ctx) => set.has(ctx.callbackData);
+    },
+    regexp(pattern: RegExp): Filter<CallbackContext> {
+      return F.callback.regexp(pattern);
+    },
+  },
+
+  /**
+   * Compose filters with `.and` / `.or` (MagicFilter-lite).
+   * @example `F.magic(F.text.startsWith("!"), F.room.dm)`
+   */
+  magic(...filters: Array<Filter<AnyContext>>): Filter<AnyContext> & {
+    and(...more: Array<Filter<AnyContext>>): Filter<AnyContext>;
+    or(...more: Array<Filter<AnyContext>>): Filter<AnyContext>;
+  } {
+    const base = and(...filters);
+    const wrapped = base as Filter<AnyContext> & {
+      and(...more: Array<Filter<AnyContext>>): Filter<AnyContext>;
+      or(...more: Array<Filter<AnyContext>>): Filter<AnyContext>;
+    };
+    wrapped.and = (...more) => and(base, ...more);
+    wrapped.or = (...more) => or(base, ...more);
+    return wrapped;
   },
 
   miniApp: {

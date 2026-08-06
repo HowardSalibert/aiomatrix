@@ -1,4 +1,5 @@
 import { RateLimitedError } from "./errors.js";
+import { mapBotError } from "./error-map.js";
 import { runChain } from "./router.js";
 import type { AnyContext, Handler, Middleware } from "./types.js";
 import { LruCache, sleep } from "./util.js";
@@ -64,6 +65,36 @@ export function throttle(options: ThrottleOptions = {}): Middleware<AnyContext> 
     }
     await next();
   };
+}
+
+/** Room-scoped throttle (all senders in a room share one bucket). */
+export function roomThrottle(
+  options: Omit<ThrottleOptions, "key"> & { limit?: number; windowMs?: number } = {},
+): Middleware<AnyContext> {
+  return throttle({
+    limit: options.limit ?? 20,
+    windowMs: options.windowMs ?? 10_000,
+    ...options,
+    key: (ctx) => ctx.roomId || "no-room",
+  });
+}
+
+/** Per-command throttle (`ctx.commandName` or fallback to update type). */
+export function commandThrottle(
+  options: Omit<ThrottleOptions, "key"> & { limit?: number; windowMs?: number } = {},
+): Middleware<AnyContext> {
+  return throttle({
+    limit: options.limit ?? 5,
+    windowMs: options.windowMs ?? 5_000,
+    ...options,
+    key: (ctx) => {
+      const cmd =
+        "commandName" in ctx && typeof (ctx as { commandName?: string }).commandName === "string"
+          ? (ctx as { commandName: string }).commandName
+          : ctx.updateType;
+      return `${ctx.roomId}|${ctx.senderId}|${cmd}`;
+    },
+  });
 }
 
 export interface LoggingOptions {
@@ -243,6 +274,45 @@ export function rateLimitBackoff(options: RateLimitBackoffOptions = {}): Middlew
   };
 }
 
+export function once(options: {
+  /** Stable key for the side-effect (e.g. event id / command). */
+  key: (ctx: AnyContext) => string;
+  /**
+   * Backing store. Default: process-local memory with TTL.
+   * Inject Redis `SET NX` via a small adapter for multi-instance.
+   */
+  store?: {
+    tryAdd(key: string, ttlMs?: number): boolean | Promise<boolean>;
+  };
+  /** Default 24h. */
+  ttlMs?: number;
+}): Middleware<AnyContext> {
+  const ttlMs = Math.max(1, options.ttlMs ?? 24 * 60 * 60 * 1000);
+  const store = options.store ?? new MemoryOnceStore();
+  return async (ctx, next) => {
+    const key = options.key(ctx);
+    if (!key) {
+      await next();
+      return;
+    }
+    const added = await store.tryAdd(key, ttlMs);
+    if (!added) return;
+    await next();
+  };
+}
+
+class MemoryOnceStore {
+  private readonly seen = new LruCache<string, number>(10_000);
+
+  tryAdd(key: string, ttlMs?: number): boolean {
+    const now = Date.now();
+    const expires = this.seen.get(key);
+    if (expires !== undefined && expires > now) return false;
+    this.seen.set(key, now + (ttlMs ?? 24 * 60 * 60 * 1000));
+    return true;
+  }
+}
+
 export interface ErrorReplyOptions {
   /** Message sent to the room when a handler throws. */
   text?: string;
@@ -265,6 +335,35 @@ export function errorReply(options: ErrorReplyOptions = {}): Middleware<AnyConte
       await next();
     } catch (err) {
       await ctx.answer(text, { notice: options.notice !== false }).catch(() => undefined);
+      if (options.swallow !== true) throw err;
+    }
+  };
+}
+
+export interface UserFacingErrorsOptions {
+  /** Send as notice. Default true. */
+  notice?: boolean;
+  /** Swallow after replying. Default false. */
+  swallow?: boolean;
+  /** Override mapping. */
+  map?: (error: unknown) => { text: string } | null;
+}
+
+/**
+ * Reply with a short safe message from {@link import("./error-map.js").mapBotError}.
+ * Does not leak stacks, tokens, or raw API bodies.
+ */
+export function userFacingErrors(
+  options: UserFacingErrorsOptions = {},
+): Middleware<AnyContext> {
+  return async (ctx, next) => {
+    try {
+      await next();
+    } catch (err) {
+      const mapped = options.map?.(err) ?? mapBotError(err);
+      if (mapped?.text) {
+        await ctx.answer(mapped.text, { notice: options.notice !== false }).catch(() => undefined);
+      }
       if (options.swallow !== true) throw err;
     }
   };

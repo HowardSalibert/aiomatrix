@@ -135,6 +135,11 @@ export class Dispatcher {
     return this;
   }
 
+  ephemeral(...args: Parameters<Router["ephemeral"]>): this {
+    this.router.ephemeral(...args);
+    return this;
+  }
+
   on(type: UpdateType | UpdateType[] | null, ...args: Array<Function>): this {
     (this.router.on as unknown as (t: unknown, ...rest: unknown[]) => void)(type, ...args);
     return this;

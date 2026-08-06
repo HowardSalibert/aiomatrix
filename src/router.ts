@@ -10,6 +10,7 @@ import type {
   MessageContext,
   Middleware,
   MiniAppDataContext,
+  EphemeralContext,
   PollResponseContext,
   RawEventContext,
   ReactionContext,
@@ -123,6 +124,21 @@ export class Router {
     return this.register(new Set<UpdateType>(["poll_response"]), args);
   }
 
+  /** Typing / receipt / other ephemeral events (`receiveEphemeral: true`). */
+  ephemeral(...args: Array<Filter<EphemeralContext> | Handler<EphemeralContext>>): this {
+    return this.register(new Set<UpdateType>(["ephemeral"]), args);
+  }
+
+  /** Convenience: only `m.typing` ephemeral events. */
+  typing(...args: Array<Filter<EphemeralContext> | Handler<EphemeralContext>>): this {
+    return this.ephemeral((ctx) => ctx.isTyping, ...args);
+  }
+
+  /** Convenience: only `m.receipt` ephemeral events. */
+  receipt(...args: Array<Filter<EphemeralContext> | Handler<EphemeralContext>>): this {
+    return this.ephemeral((ctx) => ctx.isReceipt, ...args);
+  }
+
   toDevice(...args: Array<Filter<ToDeviceContext> | Handler<ToDeviceContext>>): this {
     return this.register(new Set<UpdateType>(["to_device"]), args);
   }
@@ -185,7 +201,13 @@ export class Router {
     return this;
   }
 
-  include(router: Router): this {
+  include(
+    router: Router,
+    options?: {
+      /** Only enter this subtree when the filter passes. */
+      filter?: Filter<AnyContext>;
+    },
+  ): this {
     if (router === this) throw new Error("a router cannot include itself");
     if (router.parent) {
       throw new Error(`router "${router.name}" is already attached to "${router.parent.name}"`);
@@ -196,6 +218,9 @@ export class Router {
       ancestor = ancestor.parent;
     }
     router.parent = this;
+    if (options?.filter) {
+      (router as Router & { includeFilter?: Filter<AnyContext> }).includeFilter = options.filter;
+    }
     this.children.push(router);
     return this;
   }
@@ -245,6 +270,9 @@ export class Router {
       };
     }
     for (const child of this.children) {
+      const includeFilter = (child as Router & { includeFilter?: Filter<AnyContext> })
+        .includeFilter;
+      if (includeFilter && !(await includeFilter(ctx))) continue;
       const found = await child.resolve(ctx, chain);
       if (found) return found;
     }

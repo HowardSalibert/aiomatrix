@@ -78,6 +78,48 @@ export class FakeClient {
     return new Set(this.directRoomIds);
   }
 
+  async sendFile(roomId, data, options = {}) {
+    return this.sendEvent(roomId, "m.room.message", {
+      msgtype: options.msgtype ?? "m.file",
+      body: options.caption ?? options.filename ?? "file",
+      filename: options.filename,
+      url: "mxc://example.org/fake",
+      ...(options.extra ?? {}),
+    });
+  }
+
+  async kickUser(roomId, userId, reason) {
+    this.sent.push({ roomId, type: "kick", userId, reason });
+  }
+
+  async banUser(roomId, userId, reason) {
+    this.sent.push({ roomId, type: "ban", userId, reason });
+  }
+
+  async inviteUser(roomId, userId, reason) {
+    this.sent.push({ roomId, type: "invite", userId, reason });
+  }
+
+  async setPowerLevel(roomId, userId, level) {
+    return this.sendStateEvent(roomId, "m.room.power_levels", "", {
+      users: { [userId]: level },
+    });
+  }
+
+  async getEvent(roomId, eventId) {
+    return {
+      event_id: eventId,
+      room_id: roomId,
+      type: "m.room.message",
+      sender: "@peer:example.org",
+      content: { msgtype: "m.text", body: "quoted" },
+    };
+  }
+
+  async getOrCreateDirectRoom(userId) {
+    return `!dm_${userId}:example.org`;
+  }
+
   async getJoinedRoomMembers(roomId) {
     return this.rooms.joinedMembers(roomId);
   }
@@ -102,9 +144,28 @@ export class FakeClient {
 
 /** Minimal stand-in for `Bot` covering only what contexts need. */
 export class FakeBot {
-  constructor(client, callbacks) {
+  constructor(client, callbacks, options = {}) {
     this.client = client;
     this.callbacks = callbacks;
+    this.selfId = options.selfId ?? client.selfId ?? "@bot:example.org";
+    this.clientProfile = options.clientProfile ?? "stock";
+    this.isStopping = false;
+    this.logger = createDefaultLogger("silent");
+    this._hostCaps = new Map();
+  }
+
+  getHostCapabilities(roomId) {
+    return (
+      this._hostCaps.get(roomId) ?? {
+        profile: this.clientProfile,
+        features: new Set(),
+        keyboardNative: this.clientProfile === "aware",
+        toast: this.clientProfile === "aware",
+        progress: this.clientProfile === "aware",
+        pollUi: this.clientProfile === "aware",
+        miniApp: this.clientProfile === "aware",
+      }
+    );
   }
 
   readMiniAppData(event) {
@@ -118,16 +179,29 @@ export class FakeBot {
     };
   }
 
-  readCallbackEvent(roomId, event) {
+  async readCallbackEvent(roomId, event) {
     if (event.type !== "dev.aiomatrix.callback") return null;
     const token = event.content?.token;
-    const record = token ? this.callbacks.resolve(token, event.sender) : null;
+    const record = token
+      ? this.callbacks.resolveAsync
+        ? await this.callbacks.resolveAsync(token, event.sender)
+        : this.callbacks.resolve(token, event.sender)
+      : null;
     if (!record || record.roomId !== roomId) return null;
     return {
       callbackData: record.data,
       messageEventId: record.messageEventId,
       queryId: token,
     };
+  }
+
+  waitFor(filter, options = {}) {
+    const timeoutMs = options.timeoutMs ?? 60_000;
+    return new Promise((_, reject) => {
+      setTimeout(() => {
+        reject(new (globalThis.WaitForTimeoutError ?? Error)(`waitFor timed out after ${timeoutMs}ms`));
+      }, timeoutMs).unref?.();
+    });
   }
 }
 
@@ -139,7 +213,7 @@ export function makeFactory(options = {}) {
   const client = options.client ?? new FakeClient(options);
   const callbacks = options.callbacks ?? new CallbackRegistry();
   const storage = options.storage ?? new MemoryStorage();
-  const bot = options.bot ?? new FakeBot(client, callbacks);
+  const bot = options.bot ?? new FakeBot(client, callbacks, options);
   const factory = new ContextFactory({
     bot,
     client,

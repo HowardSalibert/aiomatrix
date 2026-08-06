@@ -1,6 +1,6 @@
 // ---------------------------------------------------------------- core API
 export { Bot } from "./bot.js";
-export type { BotHealth, MiniAppLaunch, MiniAppLaunchOptions, RunOptions } from "./bot.js";
+export type { BotHealth, BotCryptoHealth, MiniAppLaunch, MiniAppLaunchOptions, RunOptions } from "./bot.js";
 export { Dispatcher } from "./dispatcher.js";
 export type { DispatcherStats } from "./dispatcher.js";
 export { Router, runChain } from "./router.js";
@@ -56,15 +56,19 @@ export type { Storage, StorageRecord } from "./fsm.js";
 export {
   autoMarkRead,
   accessControl,
+  commandThrottle,
   compose,
   errorReply,
   getTranslator,
   i18n,
   logging,
+  once,
   rateLimitBackoff,
+  roomThrottle,
   skipSelf,
   throttle,
   typingIndicator,
+  userFacingErrors,
 } from "./middleware.js";
 export type {
   ErrorReplyOptions,
@@ -73,16 +77,20 @@ export type {
   RateLimitBackoffOptions,
   ThrottleOptions,
   Translator,
+  UserFacingErrorsOptions,
   UserFilterOptions,
 } from "./middleware.js";
 
 // ------------------------------------------------------------------ keyboards
 export {
+  CALLBACK_ANSWER_EVENT_TYPE,
   CALLBACK_EVENT_TYPE,
   CALLBACK_FALLBACK_COMMAND,
   CallbackRegistry,
   SignedCallbackRegistry,
   InlineKeyboard,
+  PROGRESS_EVENT_TYPE,
+  TOAST_EVENT_TYPE,
   buildCallbackContent,
   isSafeButtonUrl,
   KEYBOARD_CONTENT_KEY,
@@ -117,6 +125,14 @@ export {
 } from "./file-ttl-map.js";
 export type { FileSharedTokenStores } from "./file-ttl-map.js";
 export {
+  RedisAsyncNonceStore,
+  RedisAsyncUsedTokenStore,
+  RedisStorage,
+  RedisTtlStringMap,
+  createRedisSharedTokenStores,
+} from "./redis-stores.js";
+export type { RedisLike, RedisSharedTokenStores } from "./redis-stores.js";
+export {
   AWARE_MESSAGE_DEFAULTS,
   AWARE_MINI_APP_DEFAULTS,
   BOT_CAPABILITIES_SCHEMA_VERSION,
@@ -127,6 +143,58 @@ export type {
   BotCapabilitiesContent,
   BuildBotCapabilitiesOptions,
 } from "./bot-capabilities.js";
+
+// ----------------------------------------------------------- command args
+export { parseCommandArgs, tokenizeArgs } from "./command-args.js";
+export type {
+  CommandArgKind,
+  CommandArgSpec,
+  CommandArgsSchema,
+  ParsedCommandArgs,
+} from "./command-args.js";
+
+// ------------------------------------------------------------------- polls
+export {
+  POLL_END_EVENT_TYPES,
+  POLL_START_EVENT_TYPES,
+  buildPollEndContent,
+  buildPollStartContent,
+  pollEndEventType,
+  pollStartEventType,
+} from "./polls.js";
+export type { PollAnswer, SendPollOptions } from "./polls.js";
+
+// ------------------------------------------------------------------ metrics
+export { emitMetric } from "./metrics.js";
+export type { BotMetric, BotMetricName, MetricHandler } from "./metrics.js";
+
+// ----------------------------------------------------------- crypto budget
+export { createCryptoSoftBudget } from "./crypto-budget.js";
+export type { CryptoSoftBudget, CryptoSoftBudgetOptions } from "./crypto-budget.js";
+
+// ----------------------------------------------------------- conversations
+export { Conversation, createConversation } from "./conversation.js";
+export type { ConversationOptions, ConversationStep } from "./conversation.js";
+
+// -------------------------------------------------------- host capabilities
+export {
+  HOST_CAPABILITIES_SCHEMA_VERSION,
+  HOST_CAPABILITIES_STATE_EVENT_TYPE,
+  buildHostCapabilitiesContent,
+  parseHostCapabilities,
+} from "./host-capabilities.js";
+export type { HostCapabilitiesContent, ResolvedHostCapabilities } from "./host-capabilities.js";
+
+// ---------------------------------------------------------------- error map
+export { mapBotError } from "./error-map.js";
+
+// ----------------------------------------------------------------------- otel
+export { createOtelMetricHandler, createOtelRequestHandler } from "./otel.js";
+export type {
+  OtelAdapterOptions,
+  OtelLikeCounter,
+  OtelLikeHistogram,
+} from "./otel.js";
 
 // --------------------------------------------------------------------- HTML
 export { MATRIX_ALLOWED_TAGS, fmt, html, markdownToHtml, sanitizeMatrixHtml } from "./html.js";
@@ -153,7 +221,7 @@ export type {
   MessageHandler,
   SendEventOptions,
 } from "./client.js";
-export { buildMessageContent, markdownFormattedOrUndefined, sendMessageWithOptions } from "./send.js";
+export { buildMessageContent, editMessageWithOptions, markdownFormattedOrUndefined, sendMessageWithOptions, tokenizeKeyboard, txnIdFromIdempotencyKey } from "./send.js";
 export type { MessageSource, SendTarget } from "./send.js";
 
 // --------------------------------------------------------------------- infra
@@ -250,6 +318,7 @@ export {
   resolveEncryptionSharePolicy,
   shouldRotateEveryMessage,
 } from "./crypto-policy.js";
+export type { ResolvedEncryptionSharePolicy } from "./crypto-policy.js";
 export type { CryptoEngine, CryptoEngineCreateOptions } from "./crypto.js";
 export {
   assertDeviceIdMatch,
@@ -275,12 +344,14 @@ export {
   EncryptionStateUnknownError,
   HandlerTimeoutError,
   aiomatrixError,
+  InsufficientPowerError,
   MediaTooLargeError,
   MiniAppAuthError,
   PeerKeysMissingError,
   RateLimitedError,
   RequestTimeoutError,
   RoomKeyWithheldError,
+  WaitForTimeoutError,
 } from "./errors.js";
 export type { DeviceMismatchRecovery, DeviceMismatchSuggested } from "./errors.js";
 
@@ -292,9 +363,11 @@ export type {
   CallbackContext,
   Context,
   ContextData,
+  ContextFileOptions,
   CryptoLogEvent,
   DispatcherOptions,
   EncryptionSharePolicy,
+  EphemeralContext,
   ErrorHandler,
   FilterFn,
   FsmStrategy,
@@ -319,6 +392,7 @@ export type {
   StateRef,
   ToDeviceContext,
   UpdateType,
+  WaitForOptions,
 } from "./types.js";
 
 // -------------------------------------------------------------------- utils

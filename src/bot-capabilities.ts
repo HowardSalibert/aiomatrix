@@ -66,7 +66,10 @@ export function buildBotCapabilitiesContent(
       "mini_app",
       "mini_app_data",
       "callback",
+      "callback_answer",
       "format_message_preview",
+      "poll",
+      "wait_for",
     ],
   };
 }

@@ -1,6 +1,11 @@
 import type { EncryptionSharePolicy } from "./types.js";
 import { isPlainObject } from "./util.js";
 
+/** Resolved share knobs (excludes optional softBudget). */
+export type ResolvedEncryptionSharePolicy = Required<
+  Omit<EncryptionSharePolicy, "softBudget">
+>;
+
 /**
  * Pure E2EE policy helpers.
  *
@@ -20,7 +25,7 @@ import { isPlainObject } from "./util.js";
  * per-message path so large rooms do not KeysQuery+reshare on every send.
  * Override with `rotateEveryMessage: false` or raise/lower the peer cap.
  */
-export const DEFAULT_ENCRYPTION_SHARE_POLICY: Required<EncryptionSharePolicy> = {
+export const DEFAULT_ENCRYPTION_SHARE_POLICY: ResolvedEncryptionSharePolicy = {
   onlyAllowTrustedDevices: false,
   errorOnVerifiedUserProblem: false,
   rotateEveryMessage: true,
@@ -32,7 +37,7 @@ export const DEFAULT_ENCRYPTION_SHARE_POLICY: Required<EncryptionSharePolicy> = 
 
 export function resolveEncryptionSharePolicy(
   policy?: EncryptionSharePolicy | null,
-): Required<EncryptionSharePolicy> {
+): ResolvedEncryptionSharePolicy {
   const d = DEFAULT_ENCRYPTION_SHARE_POLICY;
   return {
     onlyAllowTrustedDevices: policy?.onlyAllowTrustedDevices ?? d.onlyAllowTrustedDevices,
@@ -53,7 +58,7 @@ export function resolveEncryptionSharePolicy(
  * unless the max is `0` (always rotate when `rotateEveryMessage` is true).
  */
 export function shouldRotateEveryMessage(
-  policy: Required<EncryptionSharePolicy>,
+  policy: ResolvedEncryptionSharePolicy,
   peerCount: number,
 ): boolean {
   if (!policy.rotateEveryMessage) return false;
