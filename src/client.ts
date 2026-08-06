@@ -919,6 +919,10 @@ export class MatrixClient {
 
   /**
    * Upload and post a file. Encrypted rooms get an encrypted attachment.
+   *
+   * Low-level Client-Server helper — **no outbox**. Prefer `ctx.answerFile` /
+   * `ctx.replyPhoto` / `ctx.replyDocument` (or bot send helpers) when
+   * `BotCreateOptions.outbox` is enabled so transient failures enqueue.
    */
   async sendFile(
     roomId: string,
@@ -1200,8 +1204,8 @@ export class MatrixClient {
     const timeline = room.timeline?.events ?? [];
     for (const event of timeline) applyEvent(event);
 
-    // Aware-host capability state must be visible even when it only appears in
-    // the state block (not the timeline). Honour COLD_START_DISPATCH.
+    // Host capability state: deliver for bot cache warm only (Bot.feedRoomEvent
+    // updates hostCapabilitiesByRoom and does not route to handlers).
     for (const event of room.state?.events ?? []) {
       if (event.type === HOST_CAPABILITIES_STATE_EVENT_TYPE) {
         if (!shouldDispatchOnColdStart("host_capabilities_state", isBootstrap)) continue;

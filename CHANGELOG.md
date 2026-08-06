@@ -36,7 +36,8 @@ semantic versioning.
 - `answerCallback({ keyboard })` / keyboard-only edits via `editMessageWithOptions`.
 - `editMessageWithOptions` preserves prior keyboard when `keyboard` omitted.
 - Metrics: `http.request` / `http.rate_limited` / `admin.denied` / `update.timeout`
-  (dispatcher-side); `crypto.keys_query` when `encryption.softBudget` delays a keys query.
+  (dispatcher-side); `crypto.keys_query` on every engine keys/query POST
+  (`crypto.soft_budget` still tracks soft-budget delays).
 
 ## 0.7.0
 

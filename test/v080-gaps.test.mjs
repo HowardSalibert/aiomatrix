@@ -191,6 +191,20 @@ describe("0.8 gap fixes", () => {
     assert.equal(edit.content["m.new_content"]["dev.aiomatrix.keyboard"], undefined);
   });
 
+  it("FakeBot.waitFor resolves when tryResolveWaiter matches", async () => {
+    const { bot } = makeFactory();
+    const pending = bot.waitFor((ctx) => ctx.text === "hi", { timeoutMs: 2000 });
+    const resolved = bot.tryResolveWaiter({
+      updateType: "message",
+      roomId: "!r:ex",
+      senderId: "@a:ex",
+      text: "hi",
+    });
+    assert.equal(await resolved, true);
+    const ctx = await pending;
+    assert.equal(ctx.text, "hi");
+  });
+
   it("sendMessageWithOptions still works with outbox helper", async () => {
     const { client } = makeFactory();
     const id = await sendMessageWithOptions({ client, roomId: "!r:ex" }, { text: "x" });

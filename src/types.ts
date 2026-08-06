@@ -488,6 +488,7 @@ export type CryptoLogEvent =
   | { type: "withheld_detail"; roomId: string; eventType: string; bodyPreview: string }
   | { type: "peer_keys_missing"; roomId: string; peers: string[] }
   | { type: "encrypt_send"; roomId: string; eventType: string }
+  | { type: "keys_query" }
   | { type: "decrypt_failed"; roomId: string; eventId: string; queued: boolean; detail?: unknown }
   | { type: "decrypt_recovered"; roomId: string; eventId: string; attempts: number }
   | { type: "warn"; message: string; detail?: unknown }

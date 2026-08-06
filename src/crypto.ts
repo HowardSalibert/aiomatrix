@@ -273,6 +273,9 @@ export class CryptoEngine {
         break;
       case "encrypt_send":
         break;
+      case "keys_query":
+        this.logger.debug("keys/query completed");
+        break;
       case "warn":
         this.logger.warn(event.message, event.detail);
         break;
@@ -356,6 +359,7 @@ export class CryptoEngine {
       case RequestType.KeysQuery:
         await this.softBudget?.beforeKeysQuery();
         await this.postAndMark(request, "/_matrix/client/v3/keys/query", RequestType.KeysQuery);
+        this.emitCryptoLog({ type: "keys_query" });
         break;
       case RequestType.KeysClaim:
         await this.sendKeysClaim(request as KeysClaimRequest);

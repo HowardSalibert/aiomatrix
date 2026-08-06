@@ -1,6 +1,10 @@
 /**
  * Optional lightweight metrics hook. Nothing is collected unless
  * {@link BotCreateOptions.onMetric} is set — zero overhead by default.
+ *
+ * `crypto.keys_query` fires after each engine `/keys/query` POST.
+ * `crypto.soft_budget` fires when soft-budget delays share/query work.
+ * `update.timeout` fires from the Dispatcher (even if error handlers swallow).
  */
 
 export type BotMetricName =

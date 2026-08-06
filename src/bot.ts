@@ -391,6 +391,8 @@ export class Bot {
           name: "crypto.encrypt_send",
           labels: { roomId: event.roomId },
         });
+      } else if (event.type === "keys_query") {
+        emitMetric(options.onMetric, { name: "crypto.keys_query" });
       } else if (event.type === "warn" && String(event.message).includes("soft budget")) {
         cryptoHealth.softBudgetHits += 1;
         // Metrics emitted from softBudget.onSoftBudget wrapper (avoids double-count).
@@ -447,12 +449,7 @@ export class Bot {
                       value: info.delayMs,
                       labels: { kind: info.kind },
                     });
-                    if (info.kind === "keys_query") {
-                      emitMetric(options.onMetric, {
-                        name: "crypto.keys_query",
-                        value: info.delayMs,
-                      });
-                    }
+                    // keys_query count is emitted from CryptoEngine after the real POST.
                   },
                 },
               }
