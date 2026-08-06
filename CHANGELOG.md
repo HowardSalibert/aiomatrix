@@ -18,23 +18,21 @@ semantic versioning.
   `formatted_body`.
 - **`ctx.answerWebAppQuery` claims the MiniApp query** (same as `bot.answerMiniAppQuery`); a second
   call throws when the query is already spent. Prefer `ctx.answerMiniAppQuery`.
+- **Callback used-tokens / aliases / binds default to files under `storagePath`** (survive restart
+  on one host). Multi-instance bots must still inject Redis stores.
 
 ### Added
 
-- **`formatMiniAppDataPreview`**, **`formatMessagePreview`**, **`classifyAiomatrixContent`**,
-  **`stripKeyboardFallbackText` / `Html`** — shared timeline / room-list / notification path.
-- Typed MiniApp payloads: `parseMiniAppPayload`, `MINI_APP_KNOWN_ACTIONS`, publish/submit/rsvp/…
-  interfaces + `MiniAppDataHumanizer`.
-- **`hideFromStockClients`** / custom `msgtype` on MiniApp data content.
-- **`buildCallbackContent`** for aware hosts sending `dev.aiomatrix.callback`.
-- Durable short `!cb` aliases + message binds (`FileTtlStringMap` under `storagePath`, injectable
-  `callbackAliasStore` / `callbackBindStore`).
-- **`messageDefaults` on `bot.sendMessage` / `sendHtml` / callback answers / edits**.
-- Synthetic `feedMiniAppData` uses `buildMiniAppDataContent` (hidden body).
-- Exported **`MessageDefaults`**, **`ParseMode`**, **`TtlStringMap`**, **`MemoryTtlStringMap`**,
-  **`FileTtlStringMap`**, **`markdownFormattedOrUndefined`**.
-- **[AWARE_HOST.md](./AWARE_HOST.md)** — aware-host checklist, sendData vs answers, legacy
-  normalization, multi-instance stores, `relocateSession({ pruneOtherDevices: true })`.
+- **`clientProfile: "aware" | "stock"`**, `AWARE_MESSAGE_DEFAULTS` / `AWARE_MINI_APP_DEFAULTS`.
+- **`normalizeAiomatrixContent`**, **`classifyAiomatrixContent`**, preview/strip helpers,
+  **`buildCallbackContent`**, typed MiniApp payloads, **`hideFromStockClients`**.
+- **`createFileSharedTokenStores`**, `FileUsedTokenStore`, durable alias/bind maps; flush on
+  `Bot.stop()`.
+- **`BotHealth.ok` / `syncStale`**, hooks `onSyncStale` / `onRateLimited` / `onStoreWarn`.
+- **`autoMarkRead`**, **`rateLimitBackoff`** middleware.
+- **`advertiseCapabilities`** / `dev.aiomatrix.bot` state (`BOT_CAPABILITIES_STATE_EVENT_TYPE`).
+- Redis helper **`createRedisSharedTokenStores`** in `examples/redis-stores`.
+- **[AWARE_HOST.md](./AWARE_HOST.md)** — full aware-host contract.
 
 ## 0.6.1
 

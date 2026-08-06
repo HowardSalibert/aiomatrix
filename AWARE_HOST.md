@@ -7,44 +7,34 @@ Follow it so bots can keep timelines clean without losing stock-client escapes.
 
 | Setting | Aware default | Why |
 |---|---|---|
-| `messageDefaults.keyboardFallback: false` | recommended | Skip `!cb` / `<ol>` dumps; buttons live in `dev.aiomatrix.keyboard` |
-| `messageDefaults.parseMode: "markdown"` | **library default since 0.6.2** | `reply("**hi**")` gets `formatted_body` when markup is present; set `"plain"` to opt out |
-| MiniApp `includePlainLink: false` | when only aware hosts open apps | No bare https line under the card |
-| MiniApp `includeLaunchKeyboard: false` | optional | Card field is enough; avoid duplicate mini_app button |
-| MiniApp `includeKeyboardFallback: false` | library default | Do not append `!cb` under launch cards |
-| MiniApp `topLevelUrl: false` | library default | Top-level `url` means `mxc://` media — keep launch URL in `dev.aiomatrix.mini_app` only |
-| MiniApp data `body` / `summary` / `formatBody` | human preview | Raw JSON only in `dev.aiomatrix.mini_app_data.data` |
-| `hideFromStockClients: true` | for silent round-trips | Zero-width body so Element/Schildi do not show service events as chat |
+| `clientProfile: "aware"` | one switch | Applies `AWARE_MESSAGE_DEFAULTS` + lean MiniApp flags |
+| `messageDefaults.keyboardFallback: false` | via aware profile | Skip `!cb` / `<ol>` dumps |
+| `messageDefaults.parseMode: "markdown"` | **library default** | Markup gets `formatted_body`; plain `"ok"` stays plain |
+| MiniApp lean flags | via aware profile | See table in code / `AWARE_MINI_APP_DEFAULTS` |
 
 ```ts
 const bot = await Bot.create({
+  clientProfile: "aware",
+  advertiseCapabilities: true, // also writes dev.aiomatrix.bot when advertiseCommands runs
   // ...
-  messageDefaults: {
-    keyboardFallback: false, // aware room / custom client
-    // parseMode defaults to "markdown" (plain strings stay without formatted_body)
-  },
-  miniApp: {
-    defaultUrl: "https://app.example.org/",
-    includePlainLink: false,
-    includeLaunchKeyboard: true,
-  },
 });
+
+dp.use(autoMarkRead());
+dp.use(rateLimitBackoff());
 ```
 
-`bot.sendMessage` / `sendHtml` / `answerMiniAppQuery` / `ctx.answer*` / edits honour the same defaults.
+`bot.getHealth().ok` is suitable for k8s readiness (running, fresh sync, crypto ready).
+`Bot.stop()` flushes durable alias/bind/used maps under `storagePath`.
 
 ## Receive-side (clients)
 
-1. **Classify** — `classifyAiomatrixContent(content)` → `"keyboard" | "mini_app" | "mini_app_data" | null`.
-2. **Room list / notifications** — call `formatMessagePreview(content)` first. If it returns a string, use it. Do **not** show raw `content.body` for aiomatrix events (legacy JSON / `!cb` dumps).
-3. **Timeline** — render `dev.aiomatrix.keyboard` and `dev.aiomatrix.mini_app` natively; ignore plaintext / `<ol>` fallbacks when present (`stripKeyboardFallbackText` / `stripKeyboardFallbackHtml`).
-4. **MiniApp data** — read `dev.aiomatrix.mini_app_data.data`; use `formatMiniAppDataPreview(data)`.
-5. **Button presses** — send `dev.aiomatrix.callback` with `buildCallbackContent(token)` (full signed `token` from the keyboard JSON, not the short `!cb` alias).
-6. **Legacy migration** — old events may have:
-   - `body === data` (raw JSON dump)
-   - trailing `1. Label → !cb <token>` / `<ol>` blocks
-   - top-level `content.url` https on MiniApp cards  
-   Normalize with the helpers above. Do not rewrite history.
+1. **One-shot** — `normalizeAiomatrixContent(content)` → `{ kind, preview, body, … }`.
+2. Or step-by-step: `classifyAiomatrixContent` → `formatMessagePreview` → strip helpers.
+3. **Timeline** — render structured fields; ignore plaintext / `<ol>` fallbacks.
+4. **MiniApp data** — read `dev.aiomatrix.mini_app_data.data`.
+5. **Button presses** — `buildCallbackContent(token)` on `dev.aiomatrix.callback`.
+6. **Bot capabilities** — optional room state `dev.aiomatrix.bot` via `advertiseCapabilities`.
+7. **Legacy migration** — old JSON/`!cb` bodies: use the helpers; do not rewrite history.
 
 ```ts
 import { buildCallbackContent, CALLBACK_EVENT_TYPE } from "aiomatrix";
@@ -64,24 +54,7 @@ await client.sendEvent(roomId, CALLBACK_EVENT_TYPE, buildCallbackContent(button.
 
 ## Callback aliases, binds, multi-instance
 
-- Short `!cb` ids map to signed tokens via `callbackAliasStore` (default: `storagePath/callback-aliases.json`).
-- `answerCallback({ editText })` needs the source event id from `callbackBindStore` (default: `storagePath/callback-binds.json`).
-- **Answered flags** and in-memory `side` state remain process-local unless you share `callbackUsedStore` / Redis.
-- Multi-instance: inject shared `callbackAliasStore`, `callbackBindStore`, and `callbackAsyncUsedStore` (see `examples/redis-stores`).
-
-## Device GC (ops)
-
-After crypto wipes / redeploys, prune ghost devices so Megolm fanout stays small:
-
-```ts
-await relocateSession({
-  storagePath: "./data",
-  homeserverUrl: "example.org",
-  user: "@bot:example.org",
-  password: process.env.MATRIX_PASSWORD!,
-  wipeCrypto: true,
-  pruneOtherDevices: true, // recommended default ops path
-});
-```
-
-Or call `pruneOtherDevices(http, { keepDeviceId, auth })` on a live session.
+- Short `!cb` ids / binds / used-tokens default to **files under `storagePath`** (`createFileSharedTokenStores`).
+- Multi-instance: `createRedisSharedTokenStores(redis)` in `examples/redis-stores`.
+- Ops hooks: `onSyncStale`, `onRateLimited`, `onStoreWarn`.
+- Device GC: `relocateSession({ pruneOtherDevices: true })`.

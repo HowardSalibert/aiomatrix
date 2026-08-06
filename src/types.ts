@@ -104,6 +104,9 @@ export interface MessageDefaults {
   parseMode?: ParseMode;
 }
 
+/** Preset for stock Element vs aware Matrix hosts. */
+export type ClientProfile = "stock" | "aware";
+
 /** Common surface of every context object. */
 export interface BaseContext<T extends UpdateType = UpdateType> {
   readonly updateType: T;
@@ -512,6 +515,22 @@ export interface BotCreateOptions {
   /** Defaults for `answer` / `reply` / MiniApp answers. Markdown is on by default. */
   messageDefaults?: MessageDefaults;
   /**
+   * Host profile preset. `"aware"` turns off keyboard plaintext dumps and lean
+   * MiniApp cards (see `AWARE_MESSAGE_DEFAULTS` / `AWARE_MINI_APP_DEFAULTS`).
+   * Explicit `messageDefaults` / `miniApp.*` still win.
+   */
+  clientProfile?: ClientProfile;
+  /**
+   * Sync age above which {@link BotHealth.ok} is false. Default 120_000 ms.
+   */
+  healthSyncStaleMs?: number;
+  /**
+   * Publish `dev.aiomatrix.bot` state into rooms (via {@link Bot.advertiseCapabilities}).
+   * Default false — call advertiseCapabilities explicitly or set true to auto-advertise
+   * into rooms where commands are advertised.
+   */
+  advertiseCapabilities?: boolean;
+  /**
    * Callback token registry. Default: HMAC-signed tokens using `callbackSecret`
    * or the MiniApp secret. Pass `new CallbackRegistry()` for process-local opaque tokens.
    */
@@ -557,6 +576,16 @@ export interface BotCreateOptions {
   fsm?: { strategy?: FsmStrategy; namespace?: string; ttlMs?: number };
   /** Called when syncing dies unrecoverably (invalid token, revoked device). */
   onFatal?: (error: unknown) => void;
+  /** Called when sync age exceeds `healthSyncStaleMs` while the bot is running. */
+  onSyncStale?: (health: { syncAgeMs: number; lastSyncAtMs: number }) => void;
+  /** Called when a handler/send path surfaces {@link import("./errors.js").RateLimitedError}. */
+  onRateLimited?: (error: {
+    retryAfterMs: number;
+    method?: string;
+    path?: string;
+  }) => void;
+  /** Called when process-local / multi-instance store warnings are emitted. */
+  onStoreWarn?: (message: string) => void;
   /** Injected fetch implementation (tests, proxies, custom agents). */
   fetchImpl?: typeof fetch;
   /** Observability hook for every HTTP attempt. */

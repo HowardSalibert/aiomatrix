@@ -15,6 +15,18 @@ export { MINI_APP_DATA_HIDDEN_BODY };
 
 export type AiomatrixContentKind = "keyboard" | "mini_app" | "mini_app_data";
 
+export interface NormalizedAiomatrixContent {
+  kind: AiomatrixContentKind;
+  /** Room-list / notification line. */
+  preview: string;
+  /** Author-facing body with legacy `!cb` / dumps stripped when possible. */
+  body: string;
+  formattedBody?: string;
+  keyboard?: unknown;
+  miniApp?: unknown;
+  miniAppData?: unknown;
+}
+
 /** Classify aiomatrix-shaped message content, or `null` for ordinary Matrix events. */
 export function classifyAiomatrixContent(content: unknown): AiomatrixContentKind | null {
   if (!isPlainObject(content)) return null;
@@ -79,6 +91,33 @@ export function formatMessagePreview(content: unknown): string | null {
   }
 
   return null;
+}
+
+/**
+ * One-shot receive helper for aware hosts: kind + preview + cleaned bodies +
+ * structured fields. Returns `null` for ordinary Matrix messages.
+ */
+export function normalizeAiomatrixContent(content: unknown): NormalizedAiomatrixContent | null {
+  const kind = classifyAiomatrixContent(content);
+  if (!kind || !isPlainObject(content)) return null;
+  const preview = formatMessagePreview(content) ?? "";
+  const rawBody = readString(content, "body") ?? "";
+  const rawHtml = readString(content, "formatted_body");
+  let body = rawBody;
+  let formattedBody = rawHtml;
+  if (kind === "keyboard" || kind === "mini_app") {
+    body = stripKeyboardFallbackText(rawBody);
+    if (rawHtml) formattedBody = stripKeyboardFallbackHtml(rawHtml);
+  }
+  if (kind === "mini_app_data" && (rawBody === MINI_APP_DATA_HIDDEN_BODY || looksLikeJson(rawBody))) {
+    body = preview;
+  }
+  const out: NormalizedAiomatrixContent = { kind, preview, body };
+  if (formattedBody) out.formattedBody = formattedBody;
+  if (content[KEYBOARD_CONTENT_KEY] != null) out.keyboard = content[KEYBOARD_CONTENT_KEY];
+  if (content[MINI_APP_CONTENT_KEY] != null) out.miniApp = content[MINI_APP_CONTENT_KEY];
+  if (content[MINI_APP_DATA_KEY] != null) out.miniAppData = content[MINI_APP_DATA_KEY];
+  return out;
 }
 
 /**

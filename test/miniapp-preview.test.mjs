@@ -11,6 +11,7 @@ import {
   classifyAiomatrixContent,
   formatMessagePreview,
   formatMiniAppDataPreview,
+  normalizeAiomatrixContent,
   parseMiniAppPayload,
   stripKeyboardFallbackHtml,
   stripKeyboardFallbackText,
@@ -141,5 +142,18 @@ describe("formatMessagePreview", () => {
       token: "tok.mac",
       data: "legacy",
     });
+  });
+
+  it("normalizes content in one shot", () => {
+    const content = buildMiniAppDataContent({
+      data: '{"action":"submit","items":[1]}',
+      queryId: null,
+      appId: null,
+      messageId: null,
+    });
+    const norm = normalizeAiomatrixContent(content);
+    assert.equal(norm.kind, "mini_app_data");
+    assert.equal(norm.preview, "Submitted: 1 items");
+    assert.ok(norm.miniAppData);
   });
 });

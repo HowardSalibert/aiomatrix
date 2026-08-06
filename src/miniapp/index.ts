@@ -57,10 +57,11 @@ export type {
 export {
   formatMessagePreview,
   classifyAiomatrixContent,
+  normalizeAiomatrixContent,
   stripKeyboardFallbackHtml,
   stripKeyboardFallbackText,
 } from "./preview.js";
-export type { AiomatrixContentKind } from "./preview.js";
+export type { AiomatrixContentKind, NormalizedAiomatrixContent } from "./preview.js";
 
 export {
   DEFAULT_INIT_DATA_TTL_SECONDS,

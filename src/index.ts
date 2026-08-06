@@ -54,12 +54,14 @@ export type { Storage, StorageRecord } from "./fsm.js";
 
 // ---------------------------------------------------------------- middleware
 export {
+  autoMarkRead,
   accessControl,
   compose,
   errorReply,
   getTranslator,
   i18n,
   logging,
+  rateLimitBackoff,
   skipSelf,
   throttle,
   typingIndicator,
@@ -68,6 +70,7 @@ export type {
   ErrorReplyOptions,
   I18nOptions,
   LoggingOptions,
+  RateLimitBackoffOptions,
   ThrottleOptions,
   Translator,
   UserFilterOptions,
@@ -106,7 +109,24 @@ export {
   MemoryUsedTokenStore,
 } from "./token-store.js";
 export type { AsyncUsedTokenStore, TtlStringMap, UsedTokenStore } from "./token-store.js";
-export { FileTtlStringMap } from "./file-ttl-map.js";
+export {
+  FileAsyncUsedTokenStore,
+  FileTtlStringMap,
+  FileUsedTokenStore,
+  createFileSharedTokenStores,
+} from "./file-ttl-map.js";
+export type { FileSharedTokenStores } from "./file-ttl-map.js";
+export {
+  AWARE_MESSAGE_DEFAULTS,
+  AWARE_MINI_APP_DEFAULTS,
+  BOT_CAPABILITIES_SCHEMA_VERSION,
+  BOT_CAPABILITIES_STATE_EVENT_TYPE,
+  buildBotCapabilitiesContent,
+} from "./bot-capabilities.js";
+export type {
+  BotCapabilitiesContent,
+  BuildBotCapabilitiesOptions,
+} from "./bot-capabilities.js";
 
 // --------------------------------------------------------------------- HTML
 export { MATRIX_ALLOWED_TAGS, fmt, html, markdownToHtml, sanitizeMatrixHtml } from "./html.js";
@@ -289,6 +309,7 @@ export type {
   MiniAppDataContext,
   MiniAppOptions,
   ParseMode,
+  ClientProfile,
   PollResponseContext,
   RawEventContext,
   ReactionContext,
