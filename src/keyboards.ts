@@ -1,7 +1,9 @@
 import * as crypto from "node:crypto";
 import {
+  MemoryTtlStringMap,
   MemoryUsedTokenStore,
   type AsyncUsedTokenStore,
+  type TtlStringMap,
   type UsedTokenStore,
 } from "./token-store.js";
 import { escapeHtml, isPlainObject, randomId, readString, timingSafeEqualStrings } from "./util.js";
@@ -522,21 +524,36 @@ export interface SignedCallbackRegistryOptions {
    * {@link SignedCallbackRegistry.resolveAsync}.
    */
   asyncUsed?: AsyncUsedTokenStore;
+  /**
+   * Short `!cb` alias → signed token map. Defaults to process memory.
+   * Bot.create wires a file-backed map under `storagePath` so aliases survive
+   * restart; multi-instance bots should inject a shared Redis map.
+   */
+  aliasStore?: TtlStringMap;
+  /**
+   * Optional durable `token → messageEventId` map so `answerCallback({ editText })`
+   * still finds the source message after a restart.
+   */
+  bindStore?: TtlStringMap;
 }
 
 /**
- * HMAC-signed callback tokens. Any process with the same secret can resolve them;
- * only `bindMessage` / local answered flags stay process-local unless `used` is shared.
+ * HMAC-signed callback tokens. Any process with the same secret can verify the
+ * full token; short `!cb` aliases need a shared {@link TtlStringMap} (file or Redis).
+ * Without {@link SignedCallbackRegistryOptions.bindStore}, message-id bindings
+ * stay process-local.
  */
 export class SignedCallbackRegistry implements CallbackTokenStore {
   private readonly secret: string;
   private readonly ttlMs: number;
   private readonly used: UsedTokenStore;
   private readonly asyncUsed: AsyncUsedTokenStore | null;
+  private readonly aliasStore: TtlStringMap;
+  private readonly bindStore: TtlStringMap | null;
   /** Local message-id bindings and answered flags keyed by full token. */
   private readonly side = new Map<string, { messageEventId: string; answered: boolean }>();
   private readonly byMessage = new Map<string, Set<string>>();
-  /** Short `!cb` aliases → signed token (timeline stays readable). */
+  /** Hot cache: short `!cb` aliases → signed token. */
   private readonly aliases = new Map<string, string>();
   private readonly aliasOf = new Map<string, string>();
 
@@ -548,6 +565,8 @@ export class SignedCallbackRegistry implements CallbackTokenStore {
     this.ttlMs = Math.max(1, options.ttlMs ?? 24 * 60 * 60 * 1000);
     this.used = options.used ?? new MemoryUsedTokenStore();
     this.asyncUsed = options.asyncUsed ?? null;
+    this.aliasStore = options.aliasStore ?? new MemoryTtlStringMap();
+    this.bindStore = options.bindStore ?? null;
   }
 
   issue(params: CallbackIssueParams): string {
@@ -563,21 +582,37 @@ export class SignedCallbackRegistry implements CallbackTokenStore {
     };
     if (params.userId) payload.u = params.userId;
     const token = signCallbackToken(payload, this.secret);
-    this.aliases.set(alias, token);
-    this.aliasOf.set(token, alias);
+    this.rememberAlias(alias, token, ttl);
     const messageEventId = params.messageEventId ?? "";
     this.side.set(token, { messageEventId, answered: false });
-    if (messageEventId) this.trackMessage(token, messageEventId);
+    if (messageEventId) {
+      this.trackMessage(token, messageEventId);
+      this.bindStore?.set(bindKey(token), messageEventId, ttl);
+    }
     return token;
   }
 
   fallbackOf(token: string): string {
-    return this.aliasOf.get(token) ?? token;
+    return this.aliasOf.get(token) ?? this.aliasStore.get(aliasOfKey(token)) ?? token;
   }
 
   /** Resolve a short fallback alias or a full signed token to the signed form. */
   private canonicalize(token: string): string {
-    return this.aliases.get(token) ?? token;
+    if (this.aliases.has(token)) return this.aliases.get(token)!;
+    const fromStore = this.aliasStore.get(aliasKey(token));
+    if (fromStore) {
+      this.aliases.set(token, fromStore);
+      this.aliasOf.set(fromStore, token);
+      return fromStore;
+    }
+    return token;
+  }
+
+  private rememberAlias(alias: string, token: string, ttlMs: number): void {
+    this.aliases.set(alias, token);
+    this.aliasOf.set(token, alias);
+    this.aliasStore.set(aliasKey(alias), token, ttlMs);
+    this.aliasStore.set(aliasOfKey(token), alias, ttlMs);
   }
 
   bindMessage(tokens: readonly string[], messageEventId: string): void {
@@ -586,6 +621,8 @@ export class SignedCallbackRegistry implements CallbackTokenStore {
       local.messageEventId = messageEventId;
       this.side.set(token, local);
       this.trackMessage(token, messageEventId);
+      const ttl = Math.max(1, (this.peek(token)?.expiresAtMs ?? Date.now() + this.ttlMs) - Date.now());
+      this.bindStore?.set(bindKey(token), messageEventId, ttl);
     }
   }
 
@@ -600,10 +637,11 @@ export class SignedCallbackRegistry implements CallbackTokenStore {
     if (!payload) return null;
     if (payload.e <= now) return null;
     const local = this.side.get(signed);
+    const bound = local?.messageEventId || this.bindStore?.get(bindKey(signed)) || "";
     const record: CallbackTokenRecord = {
       data: payload.d,
       roomId: payload.r,
-      messageEventId: local?.messageEventId ?? "",
+      messageEventId: bound,
       expiresAtMs: payload.e,
       answered: local?.answered ?? this.used.has(answeredKey(signed)),
       singleUse: payload.s,
@@ -673,10 +711,13 @@ export class SignedCallbackRegistry implements CallbackTokenStore {
       this.byMessage.get(local.messageEventId)?.delete(signed);
     }
     this.side.delete(signed);
-    const alias = this.aliasOf.get(signed);
+    this.bindStore?.delete(bindKey(signed));
+    const alias = this.aliasOf.get(signed) ?? this.aliasStore.get(aliasOfKey(signed));
     if (alias) {
       this.aliases.delete(alias);
       this.aliasOf.delete(signed);
+      this.aliasStore.delete(aliasKey(alias));
+      this.aliasStore.delete(aliasOfKey(signed));
     }
   }
 
@@ -714,6 +755,31 @@ function deadKey(token: string): string {
 
 function answeredKey(token: string): string {
   return `cb:ans:${token}`;
+}
+
+function aliasKey(alias: string): string {
+  return `cb:alias:${alias}`;
+}
+
+function aliasOfKey(token: string): string {
+  return `cb:aliasof:${token}`;
+}
+
+function bindKey(token: string): string {
+  return `cb:bind:${token}`;
+}
+
+/**
+ * Content for a client → bot button press (`dev.aiomatrix.callback`).
+ * Aware hosts should send this instead of inventing ad-hoc shapes.
+ */
+export function buildCallbackContent(
+  token: string,
+  options?: { data?: string },
+): Record<string, unknown> {
+  const content: Record<string, unknown> = { token };
+  if (options?.data !== undefined) content.data = options.data;
+  return content;
 }
 
 function signCallbackToken(payload: SignedCallbackPayload, secret: string): string {

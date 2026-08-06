@@ -14,18 +14,27 @@ semantic versioning.
   Override with `body` / `summary` / `formatBody`, or `hideFromStockClients: true` for a
   zero-width body.
 - **Bot replies default to `parseMode: "markdown"`** via `effectiveMessageDefaults()` (override
-  with `messageDefaults: { parseMode: "plain" }`).
+  with `messageDefaults: { parseMode: "plain" }`). Plain strings without markup do **not** get a
+  `formatted_body`.
+- **`ctx.answerWebAppQuery` claims the MiniApp query** (same as `bot.answerMiniAppQuery`); a second
+  call throws when the query is already spent. Prefer `ctx.answerMiniAppQuery`.
 
 ### Added
 
-- **`formatMiniAppDataPreview`**, **`formatMessagePreview`**, **`stripKeyboardFallbackText`** —
-  shared timeline / room-list / notification path for aware hosts.
+- **`formatMiniAppDataPreview`**, **`formatMessagePreview`**, **`classifyAiomatrixContent`**,
+  **`stripKeyboardFallbackText` / `Html`** — shared timeline / room-list / notification path.
 - Typed MiniApp payloads: `parseMiniAppPayload`, `MINI_APP_KNOWN_ACTIONS`, publish/submit/rsvp/…
   interfaces + `MiniAppDataHumanizer`.
 - **`hideFromStockClients`** / custom `msgtype` on MiniApp data content.
-- **[AWARE_HOST.md](./AWARE_HOST.md)** — aware-host checklist, sendData vs answerWebAppQuery,
-  legacy normalization, `relocateSession({ pruneOtherDevices: true })` ops default.
-- `answerWebAppQuery` / `answerMiniAppQuery` honour message defaults.
+- **`buildCallbackContent`** for aware hosts sending `dev.aiomatrix.callback`.
+- Durable short `!cb` aliases + message binds (`FileTtlStringMap` under `storagePath`, injectable
+  `callbackAliasStore` / `callbackBindStore`).
+- **`messageDefaults` on `bot.sendMessage` / `sendHtml` / callback answers / edits**.
+- Synthetic `feedMiniAppData` uses `buildMiniAppDataContent` (hidden body).
+- Exported **`MessageDefaults`**, **`ParseMode`**, **`TtlStringMap`**, **`MemoryTtlStringMap`**,
+  **`FileTtlStringMap`**, **`markdownFormattedOrUndefined`**.
+- **[AWARE_HOST.md](./AWARE_HOST.md)** — aware-host checklist, sendData vs answers, legacy
+  normalization, multi-instance stores, `relocateSession({ pruneOtherDevices: true })`.
 
 ## 0.6.1
 

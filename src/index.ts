@@ -80,6 +80,7 @@ export {
   CallbackRegistry,
   SignedCallbackRegistry,
   InlineKeyboard,
+  buildCallbackContent,
   isSafeButtonUrl,
   KEYBOARD_CONTENT_KEY,
   KEYBOARD_SCHEMA_VERSION,
@@ -99,8 +100,13 @@ export type {
   KeyboardFallback,
   SignedCallbackRegistryOptions,
 } from "./keyboards.js";
-export { MemoryAsyncUsedTokenStore, MemoryUsedTokenStore } from "./token-store.js";
-export type { AsyncUsedTokenStore, UsedTokenStore } from "./token-store.js";
+export {
+  MemoryAsyncUsedTokenStore,
+  MemoryTtlStringMap,
+  MemoryUsedTokenStore,
+} from "./token-store.js";
+export type { AsyncUsedTokenStore, TtlStringMap, UsedTokenStore } from "./token-store.js";
+export { FileTtlStringMap } from "./file-ttl-map.js";
 
 // --------------------------------------------------------------------- HTML
 export { MATRIX_ALLOWED_TAGS, fmt, html, markdownToHtml, sanitizeMatrixHtml } from "./html.js";
@@ -127,7 +133,7 @@ export type {
   MessageHandler,
   SendEventOptions,
 } from "./client.js";
-export { buildMessageContent, sendMessageWithOptions } from "./send.js";
+export { buildMessageContent, markdownFormattedOrUndefined, sendMessageWithOptions } from "./send.js";
 export type { MessageSource, SendTarget } from "./send.js";
 
 // --------------------------------------------------------------------- infra
@@ -278,9 +284,11 @@ export type {
   MembershipContext,
   MessageAttachment,
   MessageContext,
+  MessageDefaults,
   Middleware,
   MiniAppDataContext,
   MiniAppOptions,
+  ParseMode,
   PollResponseContext,
   RawEventContext,
   ReactionContext,

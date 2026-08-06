@@ -13,6 +13,21 @@ import { formatMiniAppDataPreview } from "./payloads.js";
 
 export { MINI_APP_DATA_HIDDEN_BODY };
 
+export type AiomatrixContentKind = "keyboard" | "mini_app" | "mini_app_data";
+
+/** Classify aiomatrix-shaped message content, or `null` for ordinary Matrix events. */
+export function classifyAiomatrixContent(content: unknown): AiomatrixContentKind | null {
+  if (!isPlainObject(content)) return null;
+  if (isPlainObject(content[MINI_APP_DATA_KEY]) || content.msgtype === MINI_APP_DATA_MSGTYPE) {
+    return "mini_app_data";
+  }
+  if (isPlainObject(content[MINI_APP_CONTENT_KEY]) || content.msgtype === MINI_APP_MSGTYPE_STUDNOVSU) {
+    return "mini_app";
+  }
+  if (content[KEYBOARD_CONTENT_KEY] != null) return "keyboard";
+  return null;
+}
+
 /**
  * Unified preview for timeline / room list / notifications.
  *
@@ -51,9 +66,16 @@ export function formatMessagePreview(content: unknown): string | null {
 
   if (content[KEYBOARD_CONTENT_KEY] != null) {
     const body = readString(content, "body");
-    if (body == null) return null;
-    const cleaned = stripKeyboardFallbackText(body).trim();
-    return cleaned || null;
+    const html = readString(content, "formatted_body");
+    if (body != null) {
+      const cleaned = stripKeyboardFallbackText(body).trim();
+      if (cleaned) return cleaned;
+    }
+    if (html) {
+      const cleanedHtml = stripKeyboardFallbackHtml(html).trim();
+      if (cleanedHtml) return htmlToRoughPlain(cleanedHtml);
+    }
+    return null;
   }
 
   return null;
@@ -81,6 +103,24 @@ export function stripKeyboardFallbackText(body: string): string {
   }
   while (kept.length > 0 && kept[kept.length - 1]!.trim() === "") kept.pop();
   return kept.join("\n");
+}
+
+/** Remove trailing `<ol>…</ol>` keyboard dumps from `formatted_body`. */
+export function stripKeyboardFallbackHtml(html: string): string {
+  return html.replace(/<ol\b[^>]*>[\s\S]*?<\/ol>/gi, "").trim();
+}
+
+function htmlToRoughPlain(html: string): string {
+  return html
+    .replace(/<br\s*\/?>/gi, "\n")
+    .replace(/<\/p>/gi, "\n")
+    .replace(/<[^>]+>/g, "")
+    .replace(/&lt;/g, "<")
+    .replace(/&gt;/g, ">")
+    .replace(/&amp;/g, "&")
+    .replace(/&quot;/g, '"')
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
 }
 
 function looksLikeJson(text: string): boolean {

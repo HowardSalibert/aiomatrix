@@ -1,12 +1,13 @@
 import type { Bot } from "./bot.js";
 import type { MatrixClient } from "./client.js";
-import { ConfigurationError, HandlerTimeoutError } from "./errors.js";
+import { ConfigurationError, HandlerTimeoutError, MiniAppAuthError } from "./errors.js";
 import { FSMContext, type Storage } from "./fsm.js";
 import type { CallbackTokenStore, InlineKeyboard } from "./keyboards.js";
 import type { Logger } from "./logger.js";
 import { readAttachmentFromContent } from "./media.js";
+import { buildMiniAppDataContent } from "./miniapp/events.js";
 import type { Membership, PowerLevels } from "./room-cache.js";
-import { sendMessageWithOptions, type SendTarget } from "./send.js";
+import { markdownFormattedOrUndefined, sendMessageWithOptions, type SendTarget } from "./send.js";
 import type {
   AnyContext,
   BaseContext,
@@ -298,9 +299,17 @@ class MessageContextImpl
   }
 
   editMessage(eventId: string, text: string, options?: SendOptions): Promise<string> {
+    const opts = this.withDefaults(options) ?? {};
+    const formatted =
+      opts.parseMode === "markdown"
+        ? markdownFormattedOrUndefined(text)
+        : opts.parseMode === "html"
+          ? text
+          : undefined;
     return this.deps.client.editMessage(this.roomId, eventId, {
       body: text,
-      ...(options?.notice ? { notice: true } : {}),
+      ...(formatted ? { formattedBody: formatted } : {}),
+      ...(opts.notice ? { notice: true } : {}),
     });
   }
 }
@@ -408,9 +417,17 @@ class CallbackContextImpl extends ContextBase<"callback_query"> implements Callb
 
     if (options?.editText !== undefined || options?.editHtml !== undefined) {
       if (this.messageEventId) {
+        const defaults = this.withDefaults() ?? {};
+        const formatted =
+          options.editHtml ??
+          (options.editText !== undefined
+            ? defaults.parseMode === "markdown"
+              ? markdownFormattedOrUndefined(options.editText)
+              : undefined
+            : undefined);
         await this.deps.client.editMessage(this.roomId, this.messageEventId, {
           body: options.editText ?? "",
-          ...(options.editHtml ? { formattedBody: options.editHtml } : {}),
+          ...(formatted ? { formattedBody: formatted } : {}),
         });
         if (options.keyboard === null) {
           this.deps.callbacks.revokeForMessage(this.messageEventId);
@@ -422,18 +439,29 @@ class CallbackContextImpl extends ContextBase<"callback_query"> implements Callb
       await sendMessageWithOptions(
         this.sendTarget(),
         { text: options.text },
-        { notice: !options.alert, replyTo: this.messageEventId || undefined },
+        this.withDefaults({
+          notice: !options.alert,
+          replyTo: this.messageEventId || undefined,
+        }),
       );
     }
   }
 
   editMessageText(text: string, options?: SendOptions): Promise<string> {
+    const opts = this.withDefaults(options);
     if (!this.messageEventId) {
-      return sendMessageWithOptions(this.sendTarget(), { text }, options);
+      return sendMessageWithOptions(this.sendTarget(), { text }, opts);
     }
+    const formatted =
+      opts?.parseMode === "markdown"
+        ? markdownFormattedOrUndefined(text)
+        : opts?.parseMode === "html"
+          ? text
+          : undefined;
     return this.deps.client.editMessage(this.roomId, this.messageEventId, {
       body: text,
-      ...(options?.notice ? { notice: true } : {}),
+      ...(formatted ? { formattedBody: formatted } : {}),
+      ...(opts?.notice ? { notice: true } : {}),
     });
   }
 }
@@ -461,12 +489,23 @@ class MiniAppDataContextImpl extends ContextBase<"mini_app_data"> implements Min
     this.appId = init.appId;
   }
 
-  answerWebAppQuery(text: string, options?: SendOptions): Promise<string> {
-    return sendMessageWithOptions(
-      this.sendTarget(),
-      { text },
-      this.withDefaults(options),
-    );
+  async answerWebAppQuery(text: string, options?: SendOptions): Promise<string> {
+    const opts = this.withDefaults(options);
+    if (this.queryId) {
+      const eventId = await this.deps.bot.answerMiniAppQuery(this.queryId, text, opts);
+      if (eventId == null) {
+        throw new MiniAppAuthError(
+          "mini app query is unknown, expired, or already answered",
+          "expired",
+        );
+      }
+      return eventId;
+    }
+    return sendMessageWithOptions(this.sendTarget(), { text }, opts);
+  }
+
+  answerMiniAppQuery(text: string, options?: SendOptions): Promise<string> {
+    return this.answerWebAppQuery(text, options);
   }
 }
 
@@ -627,11 +666,18 @@ export class ContextFactory {
     appId: string | null;
     messageId: string | null;
   }): MiniAppDataContext {
+    const content = buildMiniAppDataContent({
+      data: params.raw,
+      queryId: params.queryId,
+      appId: params.appId,
+      messageId: params.messageId,
+      hideFromStockClients: true,
+    });
     const event: MatrixEvent = {
       type: "m.room.message",
       sender: params.userId,
       room_id: params.roomId,
-      content: { msgtype: "dev.aiomatrix.mini_app_data", body: params.raw },
+      content,
       ...(params.messageId ? { event_id: params.messageId } : {}),
     };
     return new MiniAppDataContextImpl(this.deps, {

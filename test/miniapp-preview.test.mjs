@@ -5,11 +5,14 @@ import {
   MINI_APP_CONTENT_KEY,
   MINI_APP_DATA_KEY,
   MINI_APP_DATA_MSGTYPE,
+  buildCallbackContent,
   buildMiniAppContent,
   buildMiniAppDataContent,
+  classifyAiomatrixContent,
   formatMessagePreview,
   formatMiniAppDataPreview,
   parseMiniAppPayload,
+  stripKeyboardFallbackHtml,
   stripKeyboardFallbackText,
 } from "../dist/index.js";
 
@@ -89,5 +92,54 @@ describe("formatMessagePreview", () => {
       hideFromStockClients: true,
     });
     assert.equal(formatMessagePreview(content), "Closed");
+  });
+
+  it("classifies content kinds", () => {
+    assert.equal(
+      classifyAiomatrixContent(
+        buildMiniAppDataContent({
+          data: "{}",
+          queryId: null,
+          appId: null,
+          messageId: null,
+        }),
+      ),
+      "mini_app_data",
+    );
+    assert.equal(
+      classifyAiomatrixContent(
+        buildMiniAppContent({ url: "https://app.example.org/", includeLaunchKeyboard: false }),
+      ),
+      "mini_app",
+    );
+    assert.equal(
+      classifyAiomatrixContent({
+        body: "x",
+        [KEYBOARD_CONTENT_KEY]: { version: 1, inline: [] },
+      }),
+      "keyboard",
+    );
+    assert.equal(classifyAiomatrixContent({ msgtype: "m.text", body: "hi" }), null);
+  });
+
+  it("strips HTML ol keyboard dumps", () => {
+    const html = "<p>Pick</p><ol><li>Yes: <code>!cb x</code></li></ol>";
+    assert.equal(stripKeyboardFallbackHtml(html), "<p>Pick</p>");
+    assert.equal(
+      formatMessagePreview({
+        body: "Pick\n\n1. Yes → !cb x",
+        formatted_body: html,
+        [KEYBOARD_CONTENT_KEY]: { version: 1, inline: [] },
+      }),
+      "Pick",
+    );
+  });
+
+  it("builds callback content for aware hosts", () => {
+    assert.deepEqual(buildCallbackContent("tok.mac"), { token: "tok.mac" });
+    assert.deepEqual(buildCallbackContent("tok.mac", { data: "legacy" }), {
+      token: "tok.mac",
+      data: "legacy",
+    });
   });
 });

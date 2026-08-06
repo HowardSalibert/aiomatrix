@@ -47,7 +47,7 @@ export function buildMessageContent(
   const keyboardFallback = opts.keyboardFallback !== false;
 
   let plain = source.text ?? (source.html ? htmlToPlainBody(source.html) : "");
-  let formatted =
+  let formatted: string | null =
     source.html ??
     (source.text && parseMode !== "plain" ? formatPlain(source.text, parseMode) : null);
   let keyboardContent: KeyboardContent | null = null;
@@ -60,7 +60,9 @@ export function buildMessageContent(
       if (fallback.html) {
         const base =
           formatted ??
-          (source.text ? formatPlain(source.text, parseMode) : plainToHtml(""));
+          (source.text
+            ? formatPlain(source.text, parseMode) ?? plainToHtml(source.text)
+            : plainToHtml(""));
         formatted = `${base}${fallback.html}`;
       }
     }
@@ -157,11 +159,31 @@ function buildRelation(
   return null;
 }
 
-function formatPlain(text: string, parseMode: ParseMode): string {
-  if (!text) return "";
-  if (parseMode === "markdown") return markdownToHtml(text);
+function formatPlain(text: string, parseMode: ParseMode): string | null {
+  if (!text) return null;
   if (parseMode === "html") return text;
-  return plainToHtml(text);
+  if (parseMode === "markdown") return markdownFormattedOrUndefined(text) ?? null;
+  return null;
+}
+
+/**
+ * Convert markdown to HTML only when the text actually contains markup.
+ * Plain `"ok"` stays without `formatted_body` even under `parseMode: "markdown"`.
+ */
+export function markdownFormattedOrUndefined(text: string): string | undefined {
+  if (!text || !looksLikeMarkdown(text)) return undefined;
+  return markdownToHtml(text);
+}
+
+function looksLikeMarkdown(text: string): boolean {
+  return (
+    /```/.test(text) ||
+    /`[^`\n]+`/.test(text) ||
+    /\*\*[^*]+\*\*/.test(text) ||
+    /(^|[^*])\*[^*\n]+\*([^*]|$)/.test(text) ||
+    /(^|[^_])_[^_\n]+_([^_]|$)/.test(text) ||
+    /\[[^\]]+\]\(https?:\/\/[^)\s]+\)/.test(text)
+  );
 }
 
 function plainToHtml(text: string): string {

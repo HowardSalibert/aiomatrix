@@ -20,6 +20,7 @@ import { ContextFactory } from "./context.js";
 import { assertDeviceIdMatch, assertOwnDeviceKeysReady } from "./crypto-guard.js";
 import type { Dispatcher } from "./dispatcher.js";
 import { ConfigurationError, DeviceMismatchError, MiniAppAuthError } from "./errors.js";
+import { FileTtlStringMap } from "./file-ttl-map.js";
 import {
   CALLBACK_EVENT_TYPE,
   CALLBACK_FALLBACK_COMMAND,
@@ -198,10 +199,18 @@ export class Bot {
       this.logger,
     );
     const callbackSecret = params.options.callbackSecret ?? this.miniAppSecret;
+    const aliasMap =
+      params.options.callbackAliasStore ??
+      new FileTtlStringMap(path.join(params.storagePath, "callback-aliases.json"));
+    const bindMap =
+      params.options.callbackBindStore ??
+      new FileTtlStringMap(path.join(params.storagePath, "callback-binds.json"));
     this.callbacks =
       params.options.callbacks ??
       new SignedCallbackRegistry({
         secret: callbackSecret,
+        aliasStore: aliasMap,
+        bindStore: bindMap,
         ...(params.options.callbackUsedStore
           ? { used: params.options.callbackUsedStore }
           : {}),
@@ -237,6 +246,14 @@ export class Bot {
     ) {
       this.logger.warn(
         "signed callback tokens use a process-local used-store; multi-instance bots must inject callbackAsyncUsedStore (see examples/redis-stores)",
+      );
+    }
+    if (
+      this.callbacks instanceof SignedCallbackRegistry &&
+      !params.options.callbackAliasStore
+    ) {
+      this.logger.warn(
+        "short !cb aliases persist under storagePath (single host); multi-instance bots must inject callbackAliasStore",
       );
     }
     if (
@@ -608,7 +625,7 @@ export class Bot {
     return sendMessageWithOptions(
       { client: this.client, roomId, callbacks: this.callbacks },
       { text },
-      options,
+      { ...this.effectiveMessageDefaults(), ...options },
     );
   }
 
@@ -617,7 +634,7 @@ export class Bot {
     return sendMessageWithOptions(
       { client: this.client, roomId, callbacks: this.callbacks },
       { html },
-      options,
+      { ...this.effectiveMessageDefaults(), ...options },
     );
   }
 

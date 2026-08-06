@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import {
   InlineKeyboard,
   KEYBOARD_CONTENT_KEY,
+  MemoryTtlStringMap,
   MemoryUsedTokenStore,
   SignedCallbackRegistry,
   SignedMiniAppQueryRegistry,
@@ -93,6 +94,25 @@ describe("SignedCallbackRegistry", () => {
     const fallback = renderKeyboardFallback(content[KEYBOARD_CONTENT_KEY]);
     assert.match(fallback.text, new RegExp(`!cb ${button.fallback}`));
     assert.ok(!fallback.text.includes(button.token));
+  });
+
+  it("resolves short aliases via a shared alias store after a cold registry", () => {
+    const aliasStore = new MemoryTtlStringMap();
+    const a = new SignedCallbackRegistry({ secret: SECRET, aliasStore });
+    const token = a.issue(base);
+    const alias = a.fallbackOf(token);
+    const b = new SignedCallbackRegistry({ secret: SECRET, aliasStore });
+    assert.equal(b.peek(alias).data, "vote:yes");
+    assert.equal(b.resolve(alias).roomId, "!r:example.org");
+  });
+
+  it("restores message binds from bindStore", () => {
+    const bindStore = new MemoryTtlStringMap();
+    const a = new SignedCallbackRegistry({ secret: SECRET, bindStore });
+    const token = a.issue(base);
+    a.bind([token], "$msg");
+    const b = new SignedCallbackRegistry({ secret: SECRET, bindStore });
+    assert.equal(b.peek(token).messageEventId, "$msg");
   });
 });
 

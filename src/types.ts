@@ -7,7 +7,7 @@ import type { Logger } from "./logger.js";
 import type { AsyncNonceStore, NonceStore } from "./miniapp/initdata.js";
 import type { MiniAppQueryStore } from "./miniapp/query.js";
 import type { Membership, PowerLevels } from "./room-cache.js";
-import type { AsyncUsedTokenStore, UsedTokenStore } from "./token-store.js";
+import type { AsyncUsedTokenStore, TtlStringMap, UsedTokenStore } from "./token-store.js";
 
 /** Any Matrix event as delivered by `/sync` (subset that is always present). */
 export interface MatrixEvent {
@@ -76,9 +76,14 @@ export interface SendOptions {
   keyboardFallback?: boolean;
   /**
    * How to interpret `text` when building `formatted_body`.
-   * - `plain` (default): escape only
-   * - `markdown`: lightweight `**bold**`, `_italic_`, `` `code` ``, `[label](url)`
+   * - `plain`: no formatted_body from text (unless a keyboard forces HTML fallback)
+   * - `markdown`: lightweight `**bold**`, `_italic_`, `` `code` ``, `[label](url)` —
+   *   only sets `formatted_body` when markup is present
    * - `html`: treat `text` as already-safe HTML (prefer `answerHtml` / `html` source)
+   *
+   * Bot replies default to `"markdown"` via {@link MessageDefaults} /
+   * `Bot.effectiveMessageDefaults()`. Direct `buildMessageContent` / `sendMessageWithOptions`
+   * without options still default to `"plain"`.
    */
   parseMode?: ParseMode;
   /** Mark specific users / the room as intentionally mentioned (`m.mentions`). */
@@ -256,8 +261,14 @@ export interface MiniAppDataContext extends BaseContext<"mini_app_data"> {
   readonly queryId: string | null;
   /** Mini app that produced the data. */
   readonly appId: string | null;
-  /** Reply to the mini app query with a message. */
+  /**
+   * Reply into the room and claim the launch query (when `queryId` is set).
+   * Prefer {@link answerMiniAppQuery}; this Telegram-named alias stays for
+   * ported apps.
+   */
   answerWebAppQuery(text: string, options?: SendOptions): Promise<string>;
+  /** Same as {@link answerWebAppQuery} — preferred Matrix name. */
+  answerMiniAppQuery(text: string, options?: SendOptions): Promise<string>;
 }
 
 export interface PollResponseContext extends BaseContext<"poll_response"> {
@@ -514,6 +525,16 @@ export interface BotCreateOptions {
    * When set, callback resolution prefers `resolveAsync`.
    */
   callbackAsyncUsedStore?: AsyncUsedTokenStore;
+  /**
+   * Short `!cb` alias → signed token map. Default: file under `storagePath`.
+   * Share across instances (Redis) for multi-host bots.
+   */
+  callbackAliasStore?: TtlStringMap;
+  /**
+   * Durable `token → messageEventId` binds for `answerCallback({ editText })`
+   * after restart. Default: file under `storagePath`.
+   */
+  callbackBindStore?: TtlStringMap;
   /**
    * When a persisted session's access token is rejected (startup or mid-run),
    * password-login again reusing `device.json` / the previous device id.
