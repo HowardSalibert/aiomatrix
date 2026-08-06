@@ -8,6 +8,7 @@ import {
   type KeyboardContent,
 } from "./keyboards.js";
 import type { ParseMode, SendOptions } from "./types.js";
+import { createHash } from "node:crypto";
 import { escapeHtml } from "./util.js";
 
 export interface MessageSource {
@@ -28,6 +29,18 @@ export interface SendTarget {
   threadRootId?: string | null;
   /** Restrict keyboard buttons to this user id. */
   callbackUserId?: string | null;
+}
+
+/** Deterministic Matrix txn id from an opaque idempotency key (safe charset). */
+export function txnIdFromIdempotencyKey(key: string): string {
+  const digest = createHash("sha256").update(key).digest("hex").slice(0, 32);
+  return `aio${digest}`;
+}
+
+function resolveTxnId(options?: SendOptions): string | undefined {
+  if (options?.txnId) return options.txnId;
+  if (options?.idempotencyKey) return txnIdFromIdempotencyKey(options.idempotencyKey);
+  return undefined;
 }
 
 /**
@@ -98,7 +111,7 @@ export function buildMessageContent(
  * Structured JSON keeps the full (possibly signed) token; plaintext fallback
  * uses a short alias when the registry provides one.
  */
-function tokenizeKeyboard(
+export function tokenizeKeyboard(
   keyboard: InlineKeyboard,
   target: SendTarget,
   minted: string[],
@@ -197,7 +210,82 @@ export async function sendMessageWithOptions(
   options?: SendOptions,
 ): Promise<string> {
   const { content, tokens } = buildMessageContent(source, options, target);
-  const eventId = await target.client.sendEvent(target.roomId, "m.room.message", content);
+  const txnId = resolveTxnId(options);
+  const eventId = await target.client.sendEvent(
+    target.roomId,
+    "m.room.message",
+    content,
+    txnId ? { txnId } : undefined,
+  );
   if (tokens.length > 0) target.callbacks?.bindMessage(tokens, eventId);
   return eventId;
+}
+
+/**
+ * Edit a previously sent message, optionally replacing the inline keyboard.
+ * Revokes tokens for the original event when a new keyboard is attached or
+ * `keyboard: null` is passed.
+ */
+export async function editMessageWithOptions(
+  target: SendTarget,
+  eventId: string,
+  source: MessageSource,
+  options?: SendOptions & { keyboard?: InlineKeyboard | null },
+): Promise<string> {
+  const opts = options ?? {};
+  const minted: string[] = [];
+  const parseMode: ParseMode = opts.parseMode ?? "plain";
+  let plain = source.text ?? (source.html ? htmlToPlainBody(source.html) : "");
+  let formatted: string | null =
+    source.html ??
+    (source.text && parseMode !== "plain" ? formatPlain(source.text, parseMode) : null);
+
+  let keyboardContent: KeyboardContent | null | undefined;
+  if (opts.keyboard === null) {
+    keyboardContent = null;
+    target.callbacks?.revokeForMessage?.(eventId);
+  } else if (opts.keyboard && !opts.keyboard.isEmpty) {
+    target.callbacks?.revokeForMessage?.(eventId);
+    keyboardContent = tokenizeKeyboard(opts.keyboard, target, minted);
+    if (opts.keyboardFallback !== false) {
+      const fallback = renderKeyboardFallback(keyboardContent);
+      if (fallback.text) plain = plain ? `${plain}\n\n${fallback.text}` : fallback.text;
+      if (fallback.html) {
+        const base = formatted ?? plainToHtml(source.text ?? "");
+        formatted = `${base}${fallback.html}`;
+      }
+    }
+  }
+
+  const newContent: Record<string, unknown> = {
+    msgtype: opts.notice ? "m.notice" : "m.text",
+    body: plain,
+  };
+  if (formatted !== null) {
+    newContent.format = "org.matrix.custom.html";
+    newContent.formatted_body = formatted;
+  }
+  if (keyboardContent) newContent[KEYBOARD_CONTENT_KEY] = keyboardContent;
+  if (opts.extra) Object.assign(newContent, opts.extra);
+
+  const txnId = resolveTxnId(opts);
+  const replacementId = await target.client.sendEvent(
+    target.roomId,
+    "m.room.message",
+    {
+      ...newContent,
+      body: `* ${plain}`,
+      ...(formatted
+        ? {
+            format: "org.matrix.custom.html",
+            formatted_body: `* ${formatted}`,
+          }
+        : {}),
+      "m.new_content": newContent,
+      "m.relates_to": { rel_type: "m.replace", event_id: eventId },
+    },
+    txnId ? { txnId } : undefined,
+  );
+  if (minted.length > 0) target.callbacks?.bindMessage(minted, eventId);
+  return replacementId;
 }

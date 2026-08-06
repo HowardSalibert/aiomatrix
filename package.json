@@ -1,10 +1,13 @@
 {
   "name": "aiomatrix",
-  "version": "0.6.2",
+  "version": "0.7.0",
   "description": "Aiogram-like framework for Matrix bots: routers, filters, FSM, inline keyboards, E2EE and MiniApps",
   "type": "module",
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
+  "bin": {
+    "aiomatrix": "./dist/cli/doctor.js"
+  },
   "sideEffects": false,
   "exports": {
     ".": {
@@ -44,6 +47,7 @@
     "test:live": "node --test test/live",
     "test:live:ci": "node scripts/live-hs.mjs",
     "audit:deps": "npm audit --omit=dev --audit-level=high",
+    "doctor": "node dist/cli/doctor.js",
     "dev": "tsx examples/echo/src/main.ts",
     "prepublishOnly": "npm run clean && npm run build && npm run test:only"
   },
@@ -74,6 +78,14 @@
   "homepage": "https://github.com/HowardSalibert/aiomatrix#readme",
   "optionalDependencies": {
     "@matrix-org/matrix-sdk-crypto-nodejs": "^0.6.1"
+  },
+  "peerDependencies": {
+    "redis": ">=4.0.0"
+  },
+  "peerDependenciesMeta": {
+    "redis": {
+      "optional": true
+    }
   },
   "devDependencies": {
     "@matrix-org/matrix-sdk-crypto-nodejs": "^0.6.1",

@@ -5,6 +5,50 @@ semantic versioning.
 
 ## Unreleased
 
+## 0.7.0
+
+### Added
+
+- **`ctx.waitFor(filter, { timeoutMs })`** / `bot.waitFor` — multi-step dialogs; matching updates are
+  consumed (not routed). Throws `WaitForTimeoutError`.
+- **Aware callback toast** — with `clientProfile: "aware"`, `answerCallback({ text })` emits
+  `dev.aiomatrix.callback_answer` instead of a timeline notice (`timeline: true` forces notice).
+- **First-class Redis helpers** — `createRedisSharedTokenStores`, `RedisStorage`, `RedisTtlStringMap`,
+  etc. in the main package. **No redis dependency**; pass any `RedisLike` client. Library works
+  without Redis. Optional peerDependency hint for `redis`.
+- **Strict multi-host `!cb`** — `TtlStringMap.getAsync` + `resolveAsync` awaits Redis alias reads.
+- **`ctx.answerFile` / `replyPhoto` / `replyDocument`** — media helpers with caption/keyboard/reply.
+- **`ctx.kick` / `ban` / `invite` / `setPower`** — gated on the **bot's** power levels
+  (`InsufficientPowerError` before HTTP). **`bot.dm(userId, text)`** for DMs.
+- **`parseCommandArgs` / `tokenizeArgs`** — typed command argument parsers; `Command({ argsSchema })`.
+- **`once({ key, store })` middleware** — idempotent side-effects across retries/timeouts.
+- **Optional `onMetric`** — counters for updates, sync stale, crypto, waitFor, device prune (no-op
+  when unset).
+- **`encryption.softBudget`** — opt-in soft delay on Megolm share / keys-query storms (never hard
+  fails, never auto-prunes devices; delay capped).
+- **`router.ephemeral` / `typing` / `receipt`** — when `receiveEphemeral: true`.
+- **`bot.sendPoll` / `endPoll`** — MSC3381 poll start/end; aware lean poll bodies.
+- **`InlineKeyboard.paginate`** — paginated callback grids with prev/next.
+- **`ctx.getRepliedMessage()`** — fetch the rich-reply target as a `MessageContext`.
+- **`pruneOtherDevicesOnStart`** — default **off**; requires password UIA; defaults to idle ≥ 7 days;
+  optional schedule (≥ 1h).
+- **`editMessageWithOptions` / `ctx.edit` / `bot.editMessage`** — edit with keyboard + revoke/rebind.
+- **`SendOptions.idempotencyKey` / `txnId`** — deterministic txn ids for retry-safe sends.
+- **`roomThrottle` / `commandThrottle` / `userFacingErrors` / `mapBotError`**.
+- **`F.callbackData` / `F.magic` / `F.callback.equals`** — MagicFilter-lite extras.
+- **`Conversation` / `createConversation`** — waitFor+FSM wizard helper.
+- **`Router.include(router, { filter })`** — scoped sub-routers (e.g. DM-only).
+- **`ctx.toast` / `ctx.progress`** — `dev.aiomatrix.toast` / `progress` for aware hosts.
+- **Host capabilities handshake** — `dev.aiomatrix.host` + `getHostCapabilities` / `parseHostCapabilities`.
+- **`BotHealth.cryptoHealth`**, **`bot.rotateMegolmNow(roomId)`** (share-cache invalidate only).
+- **`npx aiomatrix doctor`** — session/device/crypto checklist CLI (no secrets printed).
+- **`examples/template`** — minimal aware bot starter.
+- **`createOtelMetricHandler` / `createOtelRequestHandler`** — optional OTel-shaped adapters (no OTel dep).
+
+### Notes
+
+- Redis / metrics / soft budget / device prune / OTel are all opt-in. Core bots need no new dependencies.
+
 ## 0.6.2
 
 ### Breaking

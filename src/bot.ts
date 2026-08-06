@@ -24,6 +24,7 @@ import {
   DeviceMismatchError,
   MiniAppAuthError,
   RateLimitedError,
+  WaitForTimeoutError,
 } from "./errors.js";
 import {
   AWARE_MESSAGE_DEFAULTS,
@@ -43,7 +44,25 @@ import {
   InlineKeyboard,
 } from "./keyboards.js";
 import { createDefaultLogger, type Logger, type LogLevel } from "./logger.js";
-import type { Middleware } from "./types.js";
+import { emitMetric } from "./metrics.js";
+import {
+  pruneOtherDevices,
+  type PruneOtherDevicesOptions,
+} from "./login.js";
+import {
+  buildPollEndContent,
+  buildPollStartContent,
+  pollEndEventType,
+  pollStartEventType,
+  type SendPollOptions,
+} from "./polls.js";
+import {
+  HOST_CAPABILITIES_STATE_EVENT_TYPE,
+  parseHostCapabilities,
+  type ResolvedHostCapabilities,
+} from "./host-capabilities.js";
+import { editMessageWithOptions, sendMessageWithOptions } from "./send.js";
+import type { Middleware, WaitForOptions } from "./types.js";
 import {
   buildMiniAppContent,
   parseMiniAppDataContent,
@@ -68,7 +87,6 @@ import {
   type WidgetOptions,
 } from "./miniapp/widget.js";
 import { Scheduler } from "./scheduler.js";
-import { sendMessageWithOptions } from "./send.js";
 import type {
   AnyContext,
   BotCreateOptions,
@@ -78,6 +96,14 @@ import type {
   SendOptions,
 } from "./types.js";
 import { isPlainObject, readJsonSafe, readString, writeJsonAtomic } from "./util.js";
+
+export interface BotCryptoHealth {
+  shareRoomKeyCount: number;
+  encryptSendCount: number;
+  softBudgetHits: number;
+  lastShareAtMs: number | null;
+  lastWithheldCount: number;
+}
 
 export interface BotHealth {
   running: boolean;
@@ -97,6 +123,8 @@ export interface BotHealth {
   pendingCallbacks: number;
   pendingMiniAppQueries: number;
   scheduledJobs: number;
+  /** Soft crypto telemetry (no secrets). */
+  cryptoHealth: BotCryptoHealth;
 }
 
 export interface RunOptions {
@@ -197,6 +225,16 @@ export class Bot {
   private readonly durableStores: FileSharedTokenStores | null;
   private syncWatchTimer: ReturnType<typeof setInterval> | null = null;
   private syncStaleNotified = false;
+  private readonly hostCapabilitiesByRoom = new Map<string, ResolvedHostCapabilities>();
+  private readonly cryptoHealth: BotCryptoHealth;
+  private readonly waiters: Array<{
+    filter: (ctx: AnyContext) => boolean | Promise<boolean>;
+    roomId: string | null;
+    senderId: string | null;
+    resolve: (ctx: AnyContext) => void;
+    reject: (err: Error) => void;
+    timer: ReturnType<typeof setTimeout>;
+  }> = [];
 
   private constructor(params: {
     client: MatrixClient;
@@ -205,7 +243,15 @@ export class Bot {
     logger: Logger;
     options: BotCreateOptions;
     configuredDeviceId?: string;
+    cryptoHealth?: BotCryptoHealth;
   }) {
+    this.cryptoHealth = params.cryptoHealth ?? {
+      shareRoomKeyCount: 0,
+      encryptSendCount: 0,
+      softBudgetHits: 0,
+      lastShareAtMs: null,
+      lastWithheldCount: 0,
+    };
     this.client = params.client;
     this.storagePath = params.storagePath;
     this.cryptoEnabled = params.cryptoEnabled;
@@ -305,17 +351,52 @@ export class Bot {
       typeof options.logger === "string" || options.logger === undefined
         ? createDefaultLogger(options.logger as LogLevel | undefined)
         : options.logger;
-    const created = await createMatrixClient({ ...options, logger });
-    return new Bot({
+    const cryptoHealth: BotCryptoHealth = {
+      shareRoomKeyCount: 0,
+      encryptSendCount: 0,
+      softBudgetHits: 0,
+      lastShareAtMs: null,
+      lastWithheldCount: 0,
+    };
+    const noteCrypto = (event: import("./types.js").CryptoLogEvent): void => {
+      if (event.type === "share_room_key") {
+        cryptoHealth.shareRoomKeyCount += 1;
+        cryptoHealth.lastShareAtMs = Date.now();
+        cryptoHealth.lastWithheldCount = event.withheld;
+        emitMetric(options.onMetric, {
+          name: "crypto.share_room_key",
+          value: event.keyShares,
+          labels: { roomId: event.roomId },
+        });
+      } else if (event.type === "encrypt_send") {
+        cryptoHealth.encryptSendCount += 1;
+        emitMetric(options.onMetric, {
+          name: "crypto.encrypt_send",
+          labels: { roomId: event.roomId },
+        });
+      } else if (event.type === "warn" && String(event.message).includes("soft budget")) {
+        cryptoHealth.softBudgetHits += 1;
+        emitMetric(options.onMetric, { name: "crypto.soft_budget" });
+      }
+      options.onCryptoLog?.(event);
+    };
+    const created = await createMatrixClient({
+      ...options,
+      logger,
+      onCryptoLog: noteCrypto,
+    });
+    const bot = new Bot({
       client: created.client,
       storagePath: created.storagePath,
       cryptoEnabled: created.cryptoEnabled,
       logger,
       options,
+      cryptoHealth,
       ...(created.configuredDeviceId !== undefined
         ? { configuredDeviceId: created.configuredDeviceId }
         : {}),
     });
+    return bot;
   }
 
   /** True after crypto prepare and own-device-key verification succeeded. */
@@ -339,6 +420,72 @@ export class Bot {
 
   getDeviceId(): string | null {
     return this.client.crypto?.clientDeviceId ?? this.configuredDeviceId ?? null;
+  }
+
+  /** Effective client profile (`stock` when unset). */
+  get clientProfile(): "stock" | "aware" {
+    return this.options.clientProfile === "aware" ? "aware" : "stock";
+  }
+
+  /**
+   * Wait for the next matching update. Matching updates are consumed (not
+   * delivered to routers). Prefer {@link BaseContext.waitFor} from a handler.
+   */
+  waitFor(
+    filter: (ctx: AnyContext) => boolean | Promise<boolean>,
+    options: WaitForOptions = {},
+  ): Promise<AnyContext> {
+    const timeoutMs = Math.max(1, options.timeoutMs ?? 60_000);
+    return new Promise<AnyContext>((resolve, reject) => {
+      const entry = {
+        filter,
+        roomId: options.roomId === undefined ? null : options.roomId,
+        senderId: options.senderId === undefined ? null : options.senderId,
+        resolve: (ctx: AnyContext) => {
+          clearTimeout(entry.timer);
+          this.removeWaiter(entry);
+          emitMetric(this.options.onMetric, { name: "wait_for.resolved" });
+          resolve(ctx);
+        },
+        reject: (err: Error) => {
+          clearTimeout(entry.timer);
+          this.removeWaiter(entry);
+          reject(err);
+        },
+        timer: setTimeout(() => {
+          this.removeWaiter(entry);
+          emitMetric(this.options.onMetric, {
+            name: "wait_for.timeout",
+            value: timeoutMs,
+          });
+          reject(new WaitForTimeoutError(timeoutMs));
+        }, timeoutMs),
+      };
+      entry.timer.unref?.();
+      this.waiters.push(entry);
+    });
+  }
+
+  private removeWaiter(entry: (typeof this.waiters)[number]): void {
+    const idx = this.waiters.indexOf(entry);
+    if (idx >= 0) this.waiters.splice(idx, 1);
+  }
+
+  private async tryResolveWaiter(ctx: AnyContext): Promise<boolean> {
+    for (const waiter of [...this.waiters]) {
+      if (waiter.roomId !== null && waiter.roomId !== ctx.roomId) continue;
+      if (waiter.senderId !== null && waiter.senderId !== ctx.senderId) continue;
+      let ok = false;
+      try {
+        ok = await waiter.filter(ctx);
+      } catch {
+        ok = false;
+      }
+      if (!ok) continue;
+      waiter.resolve(ctx);
+      return true;
+    }
+    return false;
   }
 
   // ------------------------------------------------------------------ start
@@ -389,6 +536,9 @@ export class Bot {
       onRoomEvent: (roomId, event, meta) => {
         void this.feedRoomEvent(roomId, event, meta);
       },
+      onEphemeral: (roomId, event) => {
+        void this.feedEphemeral(roomId, event);
+      },
       onToDevice: (event) => {
         void this.feedToDevice(event);
       },
@@ -411,6 +561,10 @@ export class Bot {
         if (health.syncStale) {
           if (!this.syncStaleNotified) {
             this.syncStaleNotified = true;
+            emitMetric(this.options.onMetric, {
+              name: "sync.stale",
+              value: health.syncAgeMs,
+            });
             this.options.onSyncStale?.({
               syncAgeMs: health.syncAgeMs,
               lastSyncAtMs: health.lastSyncAtMs,
@@ -422,6 +576,9 @@ export class Bot {
       }, 15_000);
       this.syncWatchTimer.unref?.();
     }
+
+    await this.maybePruneOtherDevicesOnStart();
+
     this.logger.info(
       `started as ${this.selfId} (device=${this.getDeviceId() ?? "none"}, crypto=${this.cryptoEnabled}, cryptoReady=${this._cryptoReady})`,
     );
@@ -494,7 +651,44 @@ export class Bot {
       pendingCallbacks: this.callbacks.size,
       pendingMiniAppQueries: this.miniAppQueries.size,
       scheduledJobs: this.scheduler.size,
+      cryptoHealth: { ...this.cryptoHealth },
     };
+  }
+
+  /** Resolved host capabilities for a room (from `dev.aiomatrix.host` state). */
+  getHostCapabilities(roomId: string): ResolvedHostCapabilities {
+    const cached = this.hostCapabilitiesByRoom.get(roomId);
+    if (cached) return cached;
+    return parseHostCapabilities(
+      this.clientProfile === "aware"
+        ? { client_profile: "aware" }
+        : { client_profile: "stock" },
+    );
+  }
+
+  /**
+   * Safely force Megolm re-share for a room (invalidates share cache then
+   * encrypts a no-op notice is NOT sent — call before your next real send).
+   * Does not prune devices or touch other rooms.
+   */
+  rotateMegolmNow(roomId: string): void {
+    this.client.crypto?.invalidateRoomShare(roomId);
+    this.logger.info(`rotateMegolmNow: invalidated share cache for ${roomId}`);
+  }
+
+  /** Edit a bot message with full {@link SendOptions} (keyboard, parseMode, …). */
+  editMessage(
+    roomId: string,
+    eventId: string,
+    text: string,
+    options?: SendOptions,
+  ): Promise<string> {
+    return editMessageWithOptions(
+      { client: this.client, roomId, callbacks: this.callbacks },
+      eventId,
+      { text },
+      { ...this.effectiveMessageDefaults(), ...options },
+    );
   }
 
   /**
@@ -587,16 +781,41 @@ export class Bot {
     meta: Partial<ClientEventMeta> = {},
   ): Promise<void> {
     if (this.stopping || !this.dispatcher || !this.factory) return;
+    if (
+      event.type === HOST_CAPABILITIES_STATE_EVENT_TYPE &&
+      typeof event.state_key === "string"
+    ) {
+      this.hostCapabilitiesByRoom.set(roomId, parseHostCapabilities(event.content));
+    }
     // The bot's own echoes are never updates; handlers that need them can read
     // the timeline explicitly.
     if (event.sender === this.selfId) return;
     try {
       const ctx = await this.factory.fromRoomEvent(roomId, event, meta);
       if (!ctx || this.stopping) return;
-      await this.dispatcher.feed(ctx);
+      emitMetric(this.options.onMetric, { name: "update.received", labels: { type: ctx.updateType } });
+      if (await this.tryResolveWaiter(ctx)) return;
+      const handled = await this.dispatcher.feed(ctx);
+      emitMetric(this.options.onMetric, {
+        name: handled ? "update.handled" : "update.unhandled",
+        labels: { type: ctx.updateType },
+      });
     } catch (err) {
       if (this.stopping) return;
+      emitMetric(this.options.onMetric, { name: "update.error" });
       this.logger.error(`unhandled dispatch error in ${roomId}`, err);
+    }
+  }
+
+  /** Feed an ephemeral event (typing/receipt) through the dispatcher. */
+  async feedEphemeral(roomId: string, event: MatrixEvent): Promise<void> {
+    if (this.stopping || !this.dispatcher || !this.factory) return;
+    try {
+      const ctx = this.factory.fromEphemeral(roomId, event);
+      if (await this.tryResolveWaiter(ctx)) return;
+      await this.dispatcher.feed(ctx);
+    } catch (err) {
+      this.logger.error(`unhandled ephemeral dispatch error in ${roomId}`, err);
     }
   }
 
@@ -735,6 +954,106 @@ export class Bot {
       { html },
       { ...this.effectiveMessageDefaults(), ...options },
     );
+  }
+
+  /**
+   * Open (or reuse) a DM with `userId` and send a message.
+   * Does not grant room admin powers — only creates/finds a direct room.
+   */
+  async dm(
+    userId: string,
+    text: string,
+    options?: SendOptions,
+  ): Promise<{ roomId: string; eventId: string }> {
+    const roomId = await this.client.getOrCreateDirectRoom(userId);
+    const eventId = await this.sendMessage(roomId, text, options);
+    return { roomId, eventId };
+  }
+
+  /** Create an MSC3381 / `m.poll.start` poll in `roomId`. */
+  async sendPoll(roomId: string, options: SendPollOptions): Promise<string> {
+    const leanBody =
+      options.leanBody ??
+      (this.clientProfile === "aware" || this.getHostCapabilities(roomId).pollUi);
+    const content = buildPollStartContent({ ...options, leanBody });
+    return this.client.sendEvent(
+      roomId,
+      pollStartEventType(options.useUnstableType !== false),
+      content,
+    );
+  }
+
+  /** End a previously started poll. */
+  async endPoll(
+    roomId: string,
+    pollEventId: string,
+    options?: { useUnstableType?: boolean },
+  ): Promise<string> {
+    return this.client.sendEvent(
+      roomId,
+      pollEndEventType(options?.useUnstableType !== false),
+      buildPollEndContent(pollEventId),
+    );
+  }
+
+  /**
+   * Cautious device GC after start. Requires password UIA. Defaults to only
+   * deleting devices idle ≥ 7 days so concurrent/active sessions survive.
+   */
+  private async maybePruneOtherDevicesOnStart(): Promise<void> {
+    const opt = this.options.pruneOtherDevicesOnStart;
+    if (!opt) return;
+    const deviceId = this.getDeviceId();
+    if (!deviceId) {
+      this.logger.warn("pruneOtherDevicesOnStart skipped: no device id");
+      return;
+    }
+    if (!this.options.password) {
+      this.logger.warn(
+        "pruneOtherDevicesOnStart skipped: password required for /delete_devices UIA",
+      );
+      return;
+    }
+    const cfg = opt === true ? {} : opt;
+    const olderThanMs =
+      cfg.olderThanMs === undefined ? 7 * 24 * 60 * 60 * 1000 : cfg.olderThanMs;
+    const run = async (): Promise<void> => {
+      try {
+        const auth = {
+          type: "m.login.password",
+          identifier: { type: "m.id.user", user: this.selfId },
+          password: this.options.password as string,
+        };
+        const pruneOpts: PruneOtherDevicesOptions = {
+          keepDeviceId: deviceId,
+          auth,
+          ...(olderThanMs > 0 ? { olderThanMs } : {}),
+          ...(cfg.limit !== undefined ? { limit: cfg.limit } : {}),
+        };
+        const result = await pruneOtherDevices(this.client.http, pruneOpts);
+        emitMetric(this.options.onMetric, {
+          name: "device.prune",
+          value: result.deleted.length,
+        });
+        this.logger.info(
+          `pruneOtherDevicesOnStart: deleted ${result.deleted.length}, kept ${result.kept}` +
+            (olderThanMs > 0 ? ` (idle ≥ ${olderThanMs}ms)` : " (all others)"),
+        );
+      } catch (err) {
+        this.logger.warn("pruneOtherDevicesOnStart failed", err);
+      }
+    };
+    await run();
+    const interval = cfg.scheduleIntervalMs;
+    if (interval !== undefined && interval >= 3_600_000) {
+      this.scheduler.every(interval, () => void run(), {
+        name: "pruneOtherDevices",
+      });
+    } else if (interval !== undefined) {
+      this.logger.warn(
+        "pruneOtherDevicesOnStart.scheduleIntervalMs ignored (minimum 1 hour)",
+      );
+    }
   }
 
   /** Render `/help` text from the registered command specs. */

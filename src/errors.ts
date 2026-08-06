@@ -127,7 +127,7 @@ export class RoomKeyWithheldError extends aiomatrixError {
   constructor(
     readonly roomId: string,
     readonly withheld: number,
-    readonly policy: Required<EncryptionSharePolicy>,
+    readonly policy: Required<Omit<EncryptionSharePolicy, "softBudget">>,
   ) {
     super(
       `RoomKeyWithheldError: room ${roomId}: 0 key shares, ${withheld} withheld ` +
@@ -211,5 +211,29 @@ export class HandlerTimeoutError extends aiomatrixError {
     readonly where: string,
   ) {
     super(`Handler at ${where} exceeded ${timeoutMs}ms and was abandoned.`);
+  }
+}
+
+/** `ctx.waitFor` timed out without a matching update. */
+export class WaitForTimeoutError extends aiomatrixError {
+  constructor(readonly timeoutMs: number) {
+    super(`waitFor timed out after ${timeoutMs}ms`);
+  }
+}
+
+/**
+ * Bot lacks the power level required for a room-admin action.
+ * Thrown by `ctx.kick` / `ban` / `invite` / `setPower` before any HTTP call.
+ */
+export class InsufficientPowerError extends aiomatrixError {
+  constructor(
+    readonly action: "kick" | "ban" | "invite" | "set_power" | "redact",
+    readonly required: number,
+    readonly actual: number,
+    readonly roomId: string,
+  ) {
+    super(
+      `Insufficient power for ${action} in ${roomId}: have ${actual}, need ${required}`,
+    );
   }
 }

@@ -34,7 +34,10 @@ dp.use(rateLimitBackoff());
 4. **MiniApp data** — read `dev.aiomatrix.mini_app_data.data`.
 5. **Button presses** — `buildCallbackContent(token)` on `dev.aiomatrix.callback`.
 6. **Bot capabilities** — optional room state `dev.aiomatrix.bot` via `advertiseCapabilities`.
-7. **Legacy migration** — old JSON/`!cb` bodies: use the helpers; do not rewrite history.
+7. **Host capabilities** — hosts publish `dev.aiomatrix.host`; bots adapt toasts/polls via `getHostCapabilities`.
+8. **Toasts / progress** — `dev.aiomatrix.callback_answer`, `dev.aiomatrix.toast`, `dev.aiomatrix.progress`
+   (ephemeral UI; stock falls back to notices).
+9. **Legacy migration** — old JSON/`!cb` bodies: use the helpers; do not rewrite history.
 
 ```ts
 import { buildCallbackContent, CALLBACK_EVENT_TYPE } from "aiomatrix";
@@ -52,9 +55,25 @@ await client.sendEvent(roomId, CALLBACK_EVENT_TYPE, buildCallbackContent(button.
 
 `answerWebAppQuery` is an alias of `answerMiniAppQuery` and claims the launch query when `ctx.queryId` is set (double-answer safe).
 
+## Callback answers (toasts)
+
+| Profile | `answerCallback({ text })` |
+|---|---|
+| `stock` (default) | Timeline notice reply (Matrix has no native toast) |
+| `aware` | Room event `dev.aiomatrix.callback_answer` — hosts should show it ephemerally to `user_id` only |
+
+Force a notice on aware hosts with `{ text, timeline: true }`.
+
+```ts
+// Host: listen for CALLBACK_ANSWER_EVENT_TYPE
+import { CALLBACK_ANSWER_EVENT_TYPE } from "aiomatrix";
+```
+
 ## Callback aliases, binds, multi-instance
 
 - Short `!cb` ids / binds / used-tokens default to **files under `storagePath`** (`createFileSharedTokenStores`).
-- Multi-instance: `createRedisSharedTokenStores(redis)` in `examples/redis-stores`.
-- Ops hooks: `onSyncStale`, `onRateLimited`, `onStoreWarn`.
-- Device GC: `relocateSession({ pruneOtherDevices: true })`.
+- Multi-instance: `createRedisSharedTokenStores(redis)` from **`aiomatrix`** (no redis package dependency —
+  pass any `RedisLike` client). Alias resolve uses `getAsync` for strict cross-host short `!cb`.
+- Ops hooks: `onSyncStale`, `onRateLimited`, `onStoreWarn`, optional `onMetric`.
+- Device GC: `relocateSession({ pruneOtherDevices: true })` or cautious `pruneOtherDevicesOnStart`
+  (password required, idle ≥ 7 days by default).
