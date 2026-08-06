@@ -22,7 +22,6 @@ import type { Dispatcher } from "./dispatcher.js";
 import {
   ConfigurationError,
   DeviceMismatchError,
-  HandlerTimeoutError,
   MiniAppAuthError,
   RateLimitedError,
   WaitForTimeoutError,
@@ -536,6 +535,8 @@ export class Bot {
     this.pluginInstallQueue = this.pluginInstallQueue.then(async () => {
       await p.install(this, { logger: this.logger, storagePath: this.storagePath });
     });
+    // Keep the chain alive; `start` awaits and surfaces the rejection.
+    this.pluginInstallQueue.catch(() => undefined);
     return this;
   }
 
@@ -627,6 +628,12 @@ export class Bot {
     if (this.options.handlerTimeoutMs) {
       dispatcher.setHandlerTimeout(this.options.handlerTimeoutMs);
     }
+    dispatcher.setOnTimeout((ctx) => {
+      emitMetric(this.options.onMetric, {
+        name: "update.timeout",
+        labels: { type: ctx.updateType },
+      });
+    });
     this.commands.addAll(dispatcher.commandSpecs);
 
     if (this.cryptoEnabled) await this.verifyCryptoContract();
@@ -964,8 +971,8 @@ export class Bot {
       typeof event.state_key === "string"
     ) {
       this.hostCapabilitiesByRoom.set(roomId, parseHostCapabilities(event.content));
-      // Warm cache on bootstrap; do not feed handlers.
-      if (meta.bootstrap === true) return;
+      // Cache only — never feed routers (bootstrap or live updates).
+      return;
     }
 
     const coldKind = coldStartKindForEvent(event);
@@ -988,12 +995,7 @@ export class Bot {
       });
     } catch (err) {
       if (this.stopping) return;
-      if (err instanceof HandlerTimeoutError) {
-        emitMetric(this.options.onMetric, {
-          name: "update.timeout",
-          labels: { type: event.type ?? "unknown" },
-        });
-      }
+      // Timeouts are metered in Dispatcher.setOnTimeout (survives error handlers).
       emitMetric(this.options.onMetric, { name: "update.error" });
       this.logger.error(`unhandled dispatch error in ${roomId}`, err);
     }
@@ -1529,31 +1531,30 @@ export class Bot {
     roomId: string,
     options: Omit<WidgetOptions, "creatorUserId"> & { layout?: boolean },
   ): Promise<string> {
-    const eventId = await this.client.sendStateEvent(
-      roomId,
+    const target = this.messageSendTarget(roomId);
+    const eventId = await sendStateWithOutbox(
+      target,
       WIDGET_STATE_EVENT_TYPE,
       options.widgetId,
       buildWidgetStateContent({ ...options, creatorUserId: this.selfId }),
     );
     if (options.layout !== false) {
-      await this.client
-        .sendStateEvent(
-          roomId,
-          "io.element.widgets.layout",
-          "",
-          buildWidgetLayoutContent(options.widgetId),
-        )
-        .catch((err: unknown) => {
-          this.logger.debug("could not set the widget layout", err);
-        });
+      await sendStateWithOutbox(
+        target,
+        "io.element.widgets.layout",
+        "",
+        buildWidgetLayoutContent(options.widgetId),
+      ).catch((err: unknown) => {
+        this.logger.debug("could not set the widget layout", err);
+      });
     }
     return eventId;
   }
 
   /** Remove a previously pinned widget. */
   async removeWidget(roomId: string, widgetId: string): Promise<string> {
-    return this.client.sendStateEvent(
-      roomId,
+    return sendStateWithOutbox(
+      this.messageSendTarget(roomId),
       WIDGET_STATE_EVENT_TYPE,
       widgetId,
       buildWidgetRemovalContent(),

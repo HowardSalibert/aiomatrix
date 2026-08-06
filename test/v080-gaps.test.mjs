@@ -166,6 +166,31 @@ describe("0.8 gap fixes", () => {
     assert.equal(result.data.done, true);
   });
 
+  it("editMessageWithOptions empty keyboard clears like null", async () => {
+    const { client, callbacks } = makeFactory();
+    client.eventsById.set("$old", {
+      event_id: "$old",
+      type: "m.room.message",
+      content: {
+        msgtype: "m.text",
+        body: "hi",
+        "dev.aiomatrix.keyboard": {
+          version: 1,
+          inline: [[{ kind: "callback", text: "A", data: "a", token: "tok" }]],
+        },
+      },
+    });
+    await editMessageWithOptions(
+      { client, roomId: "!r:ex", callbacks },
+      "$old",
+      { text: "edited" },
+      { keyboard: new InlineKeyboard(), keyboardFallback: false },
+    );
+    const edit = client.sent.find((e) => e.content?.["m.relates_to"]?.rel_type === "m.replace");
+    assert.ok(edit);
+    assert.equal(edit.content["m.new_content"]["dev.aiomatrix.keyboard"], undefined);
+  });
+
   it("sendMessageWithOptions still works with outbox helper", async () => {
     const { client } = makeFactory();
     const id = await sendMessageWithOptions({ client, roomId: "!r:ex" }, { text: "x" });

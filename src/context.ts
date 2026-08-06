@@ -16,7 +16,6 @@ import {
   type SendTarget,
 } from "./send.js";
 import { AIOMATRIX_SCHEMA } from "./schema-contract.js";
-import { finalizeAiomatrixContent } from "./content-validate.js";
 import {
   CALLBACK_ANSWER_EVENT_TYPE,
   KEYBOARD_CONTENT_KEY,
@@ -398,9 +397,6 @@ abstract class ContextBase<T extends UpdateType> implements BaseContext<T> {
         content.body = body;
       }
     }
-
-    const validated = finalizeAiomatrixContent(content);
-    if (validated.warnings.length > 0) target.onContentWarn?.(validated.warnings);
 
     const eventId = await sendEventWithOutbox(target, "m.room.message", content);
     if (minted.length > 0) this.deps.callbacks.bindMessage(minted, eventId);

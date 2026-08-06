@@ -41,7 +41,7 @@ export const COLD_START_DISPATCH: Record<
   ephemeral: "after_bootstrap",
   to_device: "after_bootstrap",
   raw_event: "after_bootstrap",
-  /** Host capability state may warm the bot cache during bootstrap (handlers must not see it). */
+  /** Host capability state warms the bot cache only — never application handlers. */
   host_capabilities_state: "bootstrap_ok",
 };
 

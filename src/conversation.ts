@@ -24,7 +24,8 @@ const STEP_KEY = "__step";
 /**
  * Lightweight multi-step dialog on top of {@link import("./bot.js").Bot.waitFor}.
  * When `storage` + `storageKey` are set, mid-flight `data` and step index resume
- * after restart.
+ * after process restart — call {@link Conversation.run} again with the same key
+ * (in-memory waiters do not survive across processes).
  */
 export class Conversation {
   constructor(private readonly options: ConversationOptions = {}) {}

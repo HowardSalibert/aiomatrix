@@ -2,6 +2,7 @@ import { htmlToPlainBody, type MatrixClient } from "./client.js";
 import { markdownToHtml } from "./html.js";
 import {
   KEYBOARD_CONTENT_KEY,
+  parseKeyboardContent,
   renderKeyboardFallback,
   type CallbackTokenStore,
   type InlineKeyboard,
@@ -110,9 +111,6 @@ export function buildMessageContent(
   }
 
   if (opts.extra) Object.assign(content, opts.extra);
-
-  const validated = finalizeAiomatrixContent(content);
-  if (validated.warnings.length > 0) target.onContentWarn?.(validated.warnings);
 
   return { content, tokens };
 }
@@ -262,7 +260,7 @@ export async function sendEventWithOutbox(
 
 /**
  * Send a state event; enqueue to outbox on transient failure when configured.
- * Outbox flush uses `sendEvent` — state retries may need a manual re-advertise.
+ * Flush retries via `sendStateEvent` when the entry carries `stateKey`.
  */
 export async function sendStateWithOutbox(
   target: SendTarget,
@@ -321,10 +319,10 @@ export async function editMessageWithOptions(
     (source.text && parseMode !== "plain" ? formatPlain(source.text, parseMode) : null);
 
   let keyboardContent: KeyboardContent | null | undefined;
-  if (opts.keyboard === null) {
+  if (opts.keyboard === null || opts.keyboard?.isEmpty === true) {
     keyboardContent = null;
     target.callbacks?.revokeForMessage?.(eventId);
-  } else if (opts.keyboard && !opts.keyboard.isEmpty) {
+  } else if (opts.keyboard) {
     target.callbacks?.revokeForMessage?.(eventId);
     keyboardContent = tokenizeKeyboard(opts.keyboard, target, minted);
     if (opts.keyboardFallback !== false) {
@@ -335,7 +333,7 @@ export async function editMessageWithOptions(
         formatted = `${base}${fallback.html}`;
       }
     }
-  } else if (opts.keyboard === undefined) {
+  } else {
     keyboardContent = await readExistingKeyboard(target, eventId);
   }
 
@@ -349,9 +347,6 @@ export async function editMessageWithOptions(
   }
   if (keyboardContent) newContent[KEYBOARD_CONTENT_KEY] = keyboardContent;
   if (opts.extra) Object.assign(newContent, opts.extra);
-
-  const validated = finalizeAiomatrixContent(newContent);
-  if (validated.warnings.length > 0) target.onContentWarn?.(validated.warnings);
 
   const txnId = resolveTxnId(opts);
   const replacementId = await sendEventWithOutbox(
@@ -381,11 +376,10 @@ async function readExistingKeyboard(
 ): Promise<KeyboardContent | undefined> {
   const content = await readExistingEffectiveContent(target, eventId);
   if (!content) return undefined;
-  const kb = content[KEYBOARD_CONTENT_KEY];
-  if (isPlainObject(kb) && Array.isArray(kb.inline)) {
-    return kb as unknown as KeyboardContent;
-  }
-  return undefined;
+  const parsed = parseKeyboardContent(content, {
+    onWarn: target.onContentWarn,
+  });
+  return parsed ?? undefined;
 }
 
 /** Effective message content (follows `m.new_content` for edits). */

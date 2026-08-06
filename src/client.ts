@@ -1180,11 +1180,10 @@ export class MatrixClient {
       await this.refreshRoomCryptoState(roomId);
     }
 
-    const membershipEvents: MatrixEvent[] = [];
     const trackUsers: string[] = [];
     let encryptionAppeared = false;
 
-    const applyEvent = (event: Record<string, unknown>, fromState: boolean): void => {
+    const applyEvent = (event: Record<string, unknown>): void => {
       if (typeof event.state_key === "string") {
         this.rooms.applyStateEvent(roomId, event);
       }
@@ -1192,15 +1191,14 @@ export class MatrixClient {
       if (event.type === "m.room.member" && typeof event.state_key === "string") {
         const membership = readString(event.content, "membership");
         if (membership === "join" || membership === "invite") trackUsers.push(event.state_key);
-        if (!fromState) membershipEvents.push(event as MatrixEvent);
       }
     };
 
-    for (const event of room.state?.events ?? []) applyEvent(event, true);
+    for (const event of room.state?.events ?? []) applyEvent(event);
     if (isNewRoom || isBootstrap) this.rooms.markStateSynced(roomId);
 
     const timeline = room.timeline?.events ?? [];
-    for (const event of timeline) applyEvent(event, false);
+    for (const event of timeline) applyEvent(event);
 
     // Aware-host capability state must be visible even when it only appears in
     // the state block (not the timeline). Honour COLD_START_DISPATCH.
