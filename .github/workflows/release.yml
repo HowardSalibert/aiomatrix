@@ -6,7 +6,7 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: Existing tag to publish (e.g. v0.3.0)
+        description: Existing tag to publish (e.g. v0.8.0)
         required: true
 
 # One release pipeline at a time per tag (workflow_dispatch uses the input tag,
@@ -15,23 +15,66 @@ concurrency:
   group: release-${{ github.event.inputs.tag || github.ref_name }}
   cancel-in-progress: false
 
+# No `uses: actions/*` — same bootstrap as CI (git + nodejs.org).
 jobs:
   publish:
     name: publish to npm
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     permissions:
       contents: write
       # Required for npm provenance, which signs the tarball against this run.
       id-token: write
     steps:
-      - uses: actions/checkout@v5
-        with:
-          ref: ${{ github.event.inputs.tag || github.ref }}
-      - uses: actions/setup-node@v5
-        with:
-          node-version: "22"
-          cache: npm
-          registry-url: https://registry.npmjs.org
+      - name: Checkout via git
+        shell: bash
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ github.event.inputs.tag || github.ref_name }}
+        run: |
+          set -euo pipefail
+          auth="$(printf 'x-access-token:%s' "$GITHUB_TOKEN" | base64 | tr -d '\n')"
+          git init -q
+          git remote add origin "https://github.com/${GITHUB_REPOSITORY}.git" 2>/dev/null \
+            || git remote set-url origin "https://github.com/${GITHUB_REPOSITORY}.git"
+          git config --local http.https://github.com/.extraheader "AUTHORIZATION: basic ${auth}"
+          git config --local --add safe.directory "*"
+          tag="${RELEASE_TAG}"
+          ok=0
+          for i in 1 2 3 4 5; do
+            echo "fetch tag ${tag} (try $i)"
+            if git fetch --depth 1 origin "refs/tags/${tag}:refs/tags/${tag}"; then
+              ok=1
+              break
+            fi
+            sleep $((i * 4))
+          done
+          [[ "$ok" -eq 1 ]] || { echo "git fetch tag ${tag} failed" >&2; exit 1; }
+          git checkout --force --quiet "tags/${tag}"
+          git reset --hard --quiet "tags/${tag}"
+          echo "HEAD=$(git rev-parse --short HEAD) tag=${tag}"
+
+      - name: Install Node 24
+        shell: bash
+        env:
+          NODE_VERSION: "24"
+        run: bash .github/scripts/ci-install-node.sh
+
+      - name: npm auth for publish
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ -z "${NODE_AUTH_TOKEN:-}" ]]; then
+            echo "NPM_TOKEN secret is empty or missing. Set repo secret NPM_TOKEN with publish access to aiomatrix." >&2
+            exit 1
+          fi
+          cat > "$HOME/.npmrc" <<EOF
+//registry.npmjs.org/:_authToken=${NODE_AUTH_TOKEN}
+registry=https://registry.npmjs.org/
+always-auth=true
+EOF
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
 
       - run: npm ci
       - run: npm run build
@@ -53,12 +96,27 @@ jobs:
       # on the registry so the GitHub release step can still finish.
       - name: publish to npm (skip if already published)
         run: |
+          set -euo pipefail
           name="$(node -p "require('./package.json').name")"
           version="$(node -p "require('./package.json').version")"
           if npm view "${name}@${version}" version >/dev/null 2>&1; then
             echo "${name}@${version} is already on the registry; skipping publish"
-          else
-            npm publish --provenance --access public
+            exit 0
+          fi
+          set +e
+          out="$(npm publish --provenance --access public 2>&1)"
+          code=$?
+          set -e
+          echo "$out"
+          if [[ "$code" -ne 0 ]]; then
+            if echo "$out" | grep -qE '404 Not Found|ENEEDAUTH|402 Payment Required|403 Forbidden'; then
+              echo >&2
+              echo "npm publish failed with auth/access error." >&2
+              echo "Check repo secret NPM_TOKEN: must be an Automation/Granular token" >&2
+              echo "with Read and write for package '${name}' (or publish scope)." >&2
+              echo "Classic 404 on PUT often means the token cannot publish this package." >&2
+            fi
+            exit "$code"
           fi
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
