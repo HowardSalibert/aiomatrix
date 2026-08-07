@@ -1,6 +1,5 @@
 #!/usr/bin/env bash
 # Install Node from nodejs.org (not via actions/setup-node).
-# Avoids GitHub's action-download API, which has been returning 503/500.
 set -euo pipefail
 
 NODE_MAJOR="${NODE_VERSION:-24}"
@@ -48,12 +47,16 @@ PY
   esac
 }
 
+curl_retry() {
+  curl -fsSL --retry 5 --retry-delay 2 --retry-all-errors "$@"
+}
+
 version="$(resolve_version)"
 if [[ "$platform" == win ]]; then
   name="node-v${version}-win-${arch}"
   url="https://nodejs.org/dist/v${version}/${name}.zip"
   echo "Installing Node v${version} from ${url}"
-  curl -fsSL "$url" -o "${tmp}/node.zip"
+  curl_retry "$url" -o "${tmp}/node.zip"
   rm -rf "${tmp}/extract" "$dir"
   mkdir -p "${tmp}/extract" "$dir"
   if command -v unzip >/dev/null 2>&1; then
@@ -62,7 +65,6 @@ if [[ "$platform" == win ]]; then
     powershell.exe -NoProfile -Command \
       "Expand-Archive -Path '${tmp}/node.zip' -DestinationPath '${tmp}/extract' -Force"
   fi
-  # zip contains a top-level folder
   mv "${tmp}/extract/${name}" "${dir}/node"
   echo "${dir}/node" >> "$GITHUB_PATH"
   export PATH="${dir}/node:${PATH}"
@@ -70,7 +72,7 @@ else
   name="node-v${version}-${platform}-${arch}"
   url="https://nodejs.org/dist/v${version}/${name}.tar.gz"
   echo "Installing Node v${version} from ${url}"
-  curl -fsSL "$url" -o "${tmp}/node.tar.gz"
+  curl_retry "$url" -o "${tmp}/node.tar.gz"
   rm -rf "$dir"
   mkdir -p "$dir"
   tar -xzf "${tmp}/node.tar.gz" -C "$dir" --strip-components=1
@@ -78,5 +80,7 @@ else
   export PATH="${dir}/bin:${PATH}"
 fi
 
+command -v node
+command -v npm
 node -v
 npm -v

@@ -10,15 +10,18 @@ concurrency:
   group: ci-${{ github.ref }}
   cancel-in-progress: true
 
-# Intentionally no `uses: actions/*` steps. GitHub's action-download API has been
-# failing job setup with "Failed to resolve action download info" (503/500)
-# while git + nodejs.org still work. Checkout and Node are installed via shell.
+permissions:
+  contents: read
+
+# No `uses: actions/*` — GitHub's action-download API has been failing "Set up job"
+# with "Failed to resolve action download info" (503/500). Bootstrap via git +
+# nodejs.org instead (.github/scripts/ci-*.sh).
 
 jobs:
   test:
     name: test (node ${{ matrix.node }} / ${{ matrix.os }})
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 15
+    timeout-minutes: 20
     strategy:
       fail-fast: false
       matrix:
@@ -29,14 +32,36 @@ jobs:
         shell: bash
         env:
           GITHUB_TOKEN: ${{ github.token }}
+        # Script is not in the workspace yet — inline a tiny bootstrap that
+        # fetches the checkout helper from the API (not the Actions download API),
+        # then runs it. Fallback: inline git fetch.
         run: |
           set -euo pipefail
           auth="$(printf 'x-access-token:%s' "$GITHUB_TOKEN" | base64 | tr -d '\n')"
           git init -q
-          git remote add origin "https://github.com/${GITHUB_REPOSITORY}.git"
+          git remote add origin "https://github.com/${GITHUB_REPOSITORY}.git" 2>/dev/null \
+            || git remote set-url origin "https://github.com/${GITHUB_REPOSITORY}.git"
           git config --local http.https://github.com/.extraheader "AUTHORIZATION: basic ${auth}"
-          git fetch --depth 1 --quiet origin "${GITHUB_SHA}"
+          git config --local --add safe.directory "*"
+          ok=0
+          if [[ -n "${GITHUB_REF:-}" ]]; then
+            for i in 1 2 3 4 5; do
+              echo "fetch ${GITHUB_REF} (try $i)"
+              if git fetch --depth 1 origin "${GITHUB_REF}"; then ok=1; break; fi
+              sleep $((i * 4))
+            done
+          fi
+          if [[ "$ok" -ne 1 ]]; then
+            for i in 1 2 3 4 5; do
+              echo "fetch ${GITHUB_SHA} (try $i)"
+              if git fetch --depth 1 origin "${GITHUB_SHA}"; then ok=1; break; fi
+              sleep $((i * 4))
+            done
+          fi
+          [[ "$ok" -eq 1 ]] || { echo "git fetch failed" >&2; exit 1; }
           git checkout --force --quiet FETCH_HEAD
+          git reset --hard --quiet FETCH_HEAD
+          echo "HEAD=$(git rev-parse --short HEAD)"
 
       - name: Install Node ${{ matrix.node }}
         shell: bash
@@ -54,10 +79,10 @@ jobs:
           npm run check:api
           npm run check:size
 
-  extras:
+  pack:
     name: pack / audit / no-native-crypto
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 20
     steps:
       - name: Checkout via git
         shell: bash
@@ -67,10 +92,29 @@ jobs:
           set -euo pipefail
           auth="$(printf 'x-access-token:%s' "$GITHUB_TOKEN" | base64 | tr -d '\n')"
           git init -q
-          git remote add origin "https://github.com/${GITHUB_REPOSITORY}.git"
+          git remote add origin "https://github.com/${GITHUB_REPOSITORY}.git" 2>/dev/null \
+            || git remote set-url origin "https://github.com/${GITHUB_REPOSITORY}.git"
           git config --local http.https://github.com/.extraheader "AUTHORIZATION: basic ${auth}"
-          git fetch --depth 1 --quiet origin "${GITHUB_SHA}"
+          git config --local --add safe.directory "*"
+          ok=0
+          if [[ -n "${GITHUB_REF:-}" ]]; then
+            for i in 1 2 3 4 5; do
+              echo "fetch ${GITHUB_REF} (try $i)"
+              if git fetch --depth 1 origin "${GITHUB_REF}"; then ok=1; break; fi
+              sleep $((i * 4))
+            done
+          fi
+          if [[ "$ok" -ne 1 ]]; then
+            for i in 1 2 3 4 5; do
+              echo "fetch ${GITHUB_SHA} (try $i)"
+              if git fetch --depth 1 origin "${GITHUB_SHA}"; then ok=1; break; fi
+              sleep $((i * 4))
+            done
+          fi
+          [[ "$ok" -eq 1 ]] || { echo "git fetch failed" >&2; exit 1; }
           git checkout --force --quiet FETCH_HEAD
+          git reset --hard --quiet FETCH_HEAD
+          echo "HEAD=$(git rev-parse --short HEAD)"
 
       - name: Install Node 24
         shell: bash
@@ -102,7 +146,7 @@ jobs:
   live:
     name: live e2ee (synapse)
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 35
     steps:
       - name: Checkout via git
         shell: bash
@@ -112,10 +156,29 @@ jobs:
           set -euo pipefail
           auth="$(printf 'x-access-token:%s' "$GITHUB_TOKEN" | base64 | tr -d '\n')"
           git init -q
-          git remote add origin "https://github.com/${GITHUB_REPOSITORY}.git"
+          git remote add origin "https://github.com/${GITHUB_REPOSITORY}.git" 2>/dev/null \
+            || git remote set-url origin "https://github.com/${GITHUB_REPOSITORY}.git"
           git config --local http.https://github.com/.extraheader "AUTHORIZATION: basic ${auth}"
-          git fetch --depth 1 --quiet origin "${GITHUB_SHA}"
+          git config --local --add safe.directory "*"
+          ok=0
+          if [[ -n "${GITHUB_REF:-}" ]]; then
+            for i in 1 2 3 4 5; do
+              echo "fetch ${GITHUB_REF} (try $i)"
+              if git fetch --depth 1 origin "${GITHUB_REF}"; then ok=1; break; fi
+              sleep $((i * 4))
+            done
+          fi
+          if [[ "$ok" -ne 1 ]]; then
+            for i in 1 2 3 4 5; do
+              echo "fetch ${GITHUB_SHA} (try $i)"
+              if git fetch --depth 1 origin "${GITHUB_SHA}"; then ok=1; break; fi
+              sleep $((i * 4))
+            done
+          fi
+          [[ "$ok" -eq 1 ]] || { echo "git fetch failed" >&2; exit 1; }
           git checkout --force --quiet FETCH_HEAD
+          git reset --hard --quiet FETCH_HEAD
+          echo "HEAD=$(git rev-parse --short HEAD)"
 
       - name: Install Node 24
         shell: bash
