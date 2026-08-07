@@ -5,7 +5,6 @@ import {
   InlineKeyboard,
   Router,
   buildPollStartContent,
-  createOtelMetricHandler,
   editMessageWithOptions,
   mapBotError,
   parseHostCapabilities,
@@ -14,6 +13,7 @@ import {
   InsufficientPowerError,
   Command,
 } from "../dist/index.js";
+import { createOtelMetricHandler } from "../dist/otel.js";
 import { makeFactory } from "./helpers.mjs";
 
 describe("0.7.0 patch pack (1-17)", () => {

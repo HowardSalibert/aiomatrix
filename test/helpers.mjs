@@ -23,6 +23,7 @@ export class FakeClient {
     this.directRoomIds = new Set(options.directRoomIds ?? []);
     this.nextEventId = 0;
     this.attachmentBytes = options.attachmentBytes ?? new Uint8Array([1, 2, 3]);
+    this.eventsById = new Map(options.eventsById ?? []);
   }
 
   #eventId() {
@@ -33,6 +34,13 @@ export class FakeClient {
   async sendEvent(roomId, type, content) {
     const eventId = this.#eventId();
     this.sent.push({ roomId, type, content, eventId });
+    this.eventsById.set(eventId, {
+      event_id: eventId,
+      room_id: roomId,
+      type,
+      sender: this.selfId,
+      content,
+    });
     return eventId;
   }
 
@@ -107,12 +115,21 @@ export class FakeClient {
   }
 
   async getEvent(roomId, eventId) {
+    const stored = this.eventsById.get(eventId);
+    if (stored) return { ...stored, room_id: roomId };
     return {
       event_id: eventId,
       room_id: roomId,
       type: "m.room.message",
       sender: "@peer:example.org",
       content: { msgtype: "m.text", body: "quoted" },
+    };
+  }
+
+  async uploadContent(data, options = {}) {
+    return {
+      upload: { contentUri: "mxc://example.org/uploaded" },
+      file: options.encryptForRoom ? { url: "mxc://example.org/enc", key: {} } : null,
     };
   }
 
@@ -142,7 +159,9 @@ export class FakeClient {
   }
 }
 
-/** Minimal stand-in for `Bot` covering only what contexts need. */
+/** Minimal stand-in for `Bot` covering only what contexts need in unit tests.
+ * Not part of the published package — lives only under `test/helpers.mjs`.
+ */
 export class FakeBot {
   constructor(client, callbacks, options = {}) {
     this.client = client;
@@ -152,12 +171,49 @@ export class FakeBot {
     this.isStopping = false;
     this.logger = createDefaultLogger("silent");
     this._hostCaps = new Map();
+    this._outbox = options.outbox ?? null;
+    this._metrics = [];
+    this._waiters = [];
+  }
+
+  get outboxStore() {
+    return this._outbox;
+  }
+
+  noteMetric(metric) {
+    this._metrics.push(metric);
+  }
+
+  canSendToRoom() {
+    return Promise.resolve({ ok: true, encrypted: false, cryptoReady: true, missingPeers: [] });
+  }
+
+  capabilityForRoom(roomId) {
+    const host = this.getHostCapabilities(roomId);
+    const hostAware =
+      host.profile === "aware" ||
+      host.keyboardNative ||
+      host.toast ||
+      host.progress ||
+      host.pollUi ||
+      host.miniApp;
+    if (this.clientProfile === "aware") return "aware";
+    if (this.clientProfile === "hybrid") return hostAware ? "aware" : "stock";
+    return "stock";
+  }
+
+  effectiveMessageDefaults(roomId) {
+    const level = roomId !== undefined ? this.capabilityForRoom(roomId) : this.clientProfile;
+    return {
+      parseMode: "markdown",
+      ...(level === "aware" ? { keyboardFallback: false } : {}),
+    };
   }
 
   getHostCapabilities(roomId) {
     return (
       this._hostCaps.get(roomId) ?? {
-        profile: this.clientProfile,
+        profile: this.clientProfile === "hybrid" ? "stock" : this.clientProfile,
         features: new Set(),
         keyboardNative: this.clientProfile === "aware",
         toast: this.clientProfile === "aware",
@@ -196,12 +252,53 @@ export class FakeBot {
   }
 
   waitFor(filter, options = {}) {
-    const timeoutMs = options.timeoutMs ?? 60_000;
-    return new Promise((_, reject) => {
-      setTimeout(() => {
-        reject(new (globalThis.WaitForTimeoutError ?? Error)(`waitFor timed out after ${timeoutMs}ms`));
-      }, timeoutMs).unref?.();
+    const timeoutMs = Math.max(1, options.timeoutMs ?? 60_000);
+    return new Promise((resolve, reject) => {
+      const entry = {
+        filter,
+        roomId: options.roomId === undefined ? null : options.roomId,
+        senderId: options.senderId === undefined ? null : options.senderId,
+        resolve: (ctx) => {
+          clearTimeout(entry.timer);
+          this._removeWaiter(entry);
+          resolve(ctx);
+        },
+        reject: (err) => {
+          clearTimeout(entry.timer);
+          this._removeWaiter(entry);
+          reject(err);
+        },
+        timer: setTimeout(() => {
+          this._removeWaiter(entry);
+          reject(new (globalThis.WaitForTimeoutError ?? Error)(`waitFor timed out after ${timeoutMs}ms`));
+        }, timeoutMs),
+      };
+      entry.timer.unref?.();
+      this._waiters.push(entry);
     });
+  }
+
+  _removeWaiter(entry) {
+    const idx = this._waiters.indexOf(entry);
+    if (idx >= 0) this._waiters.splice(idx, 1);
+  }
+
+  /** Resolve a waiter if one matches — call from tests after building a context. */
+  async tryResolveWaiter(ctx) {
+    for (const waiter of [...this._waiters]) {
+      if (waiter.roomId !== null && waiter.roomId !== ctx.roomId) continue;
+      if (waiter.senderId !== null && waiter.senderId !== ctx.senderId) continue;
+      let ok = false;
+      try {
+        ok = await waiter.filter(ctx);
+      } catch {
+        ok = false;
+      }
+      if (!ok) continue;
+      waiter.resolve(ctx);
+      return true;
+    }
+    return false;
   }
 }
 

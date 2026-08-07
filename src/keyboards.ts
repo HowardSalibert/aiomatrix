@@ -7,6 +7,7 @@ import {
   type UsedTokenStore,
 } from "./token-store.js";
 import { escapeHtml, isPlainObject, randomId, readString, timingSafeEqualStrings } from "./util.js";
+import { checkSchemaVersion, readSchemaVersion } from "./schema-contract.js";
 
 /** Content field carrying a aiomatrix inline keyboard. */
 export const KEYBOARD_CONTENT_KEY = "dev.aiomatrix.keyboard";
@@ -285,10 +286,19 @@ export class InlineKeyboard {
 }
 
 /** Parse a keyboard out of event content, or `null`. */
-export function parseKeyboardContent(content: unknown): KeyboardContent | null {
+export function parseKeyboardContent(
+  content: unknown,
+  options?: { onWarn?: (warnings: string[]) => void },
+): KeyboardContent | null {
   if (!isPlainObject(content)) return null;
   const raw = content[KEYBOARD_CONTENT_KEY];
   if (!isPlainObject(raw) || !Array.isArray(raw.inline)) return null;
+  const versionInfo = checkSchemaVersion("keyboard", readSchemaVersion(raw));
+  if (!versionInfo.supported) {
+    options?.onWarn?.([
+      `keyboard version ${versionInfo.version} newer than library support`,
+    ]);
+  }
   const inline: InlineButton[][] = [];
   for (const row of raw.inline) {
     if (!Array.isArray(row)) continue;

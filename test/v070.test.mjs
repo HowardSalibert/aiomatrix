@@ -13,8 +13,8 @@ import {
   createCryptoSoftBudget,
   once,
   parseCommandArgs,
-  RedisTtlStringMap,
 } from "../dist/index.js";
+import { RedisTtlStringMap } from "../dist/redis-stores.js";
 import { FakeBot, FakeClient, makeFactory } from "./helpers.mjs";
 
 describe("0.7.0 surfaces", () => {

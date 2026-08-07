@@ -47,6 +47,7 @@ export class Dispatcher {
   };
   private unhandledHandler: ((ctx: AnyContext) => void | Promise<void>) | null = null;
   private handlerTimeoutMs = 0;
+  private onTimeout: ((ctx: AnyContext, err: HandlerTimeoutError) => void) | null = null;
 
   constructor(options: DispatcherOptions = {}) {
     this.storage = options.storage ?? new MemoryStorage();
@@ -57,6 +58,12 @@ export class Dispatcher {
   /** Abandon handlers that run longer than `ms` (0 disables). */
   setHandlerTimeout(ms: number): this {
     this.handlerTimeoutMs = Math.max(0, ms);
+    return this;
+  }
+
+  /** Called when a handler is abandoned by {@link setHandlerTimeout} (before error handlers). */
+  setOnTimeout(handler: (ctx: AnyContext, err: HandlerTimeoutError) => void): this {
+    this.onTimeout = handler;
     return this;
   }
 
@@ -175,7 +182,14 @@ export class Dispatcher {
     } catch (err) {
       abort.abort(err);
       this.stats.errors += 1;
-      if (err instanceof HandlerTimeoutError) this.stats.timeouts += 1;
+      if (err instanceof HandlerTimeoutError) {
+        this.stats.timeouts += 1;
+        try {
+          this.onTimeout?.(ctx, err);
+        } catch {
+          // Metrics / hooks must not mask the original error.
+        }
+      }
       const wasHandled = await this.runErrorHandlers(err, ctx);
       if (!wasHandled) throw err;
     }

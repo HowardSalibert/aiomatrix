@@ -5,6 +5,40 @@ semantic versioning.
 
 ## Unreleased
 
+## 0.8.0
+
+### Added
+
+- Schema contract: `AIOMATRIX_SCHEMA_VERSION`, `AIOMATRIX_SCHEMA`, `AWARE_CONTRACT`,
+  `resolveCapabilityLevel`; capability level `hybrid`.
+- Unified content pipeline: `pipelineAiomatrixContent` / `buildAiomatrixEnvelope` /
+  `finalizeAiomatrixContent` on message, edit, toast, progress, callback_answer, poll, media, state.
+- Outbox: `FileOutboxStore` / `flushOutbox`, `BotCreateOptions.outbox`,
+  `sendEventWithOutbox` / `sendStateWithOutbox` on bot/ctx send paths (transient failures enqueue).
+- Fairer multi-room wake in `DispatchQueue`.
+- Cold-start contract: `COLD_START_DISPATCH` / `shouldDispatchOnColdStart`
+  (bootstrap skips timeline + invites; host caps cache-only).
+- `Bot.use(plugin)` / `definePlugin` (async install queued until `start`); typed `BaseContext<…, Data>`.
+- `canSendToRoom` / `Bot.canSendToRoom`.
+- Multi-process `StorageLock` (default on; `storageLock: false` to disable).
+- CLI: `aiomatrix doctor | migrate | create`, bin `create-aiomatrix`
+  (scaffold emits `tsconfig.json`, `--env-file`, `--hybrid` / `--password`).
+- Adapter subpaths: `aiomatrix/redis`, `aiomatrix/otel` (not root exports).
+- Application Service: external only —
+  [aiomatrix-appservice](https://github.com/FakeHoward/aiomatrix-appservice)
+  (`packages/appservice` is a pointer, not an in-tree package).
+- Docs: `SCENES.md`, `COMPAT.md`, `PUBLIC_API.md`; CI `check:api` / `check:size`.
+- `invalidateMegolmShare` (preferred); `rotateMegolmNow` kept as deprecated alias.
+- `RedisOnceStore` for `once({ store })` multi-instance bots.
+
+### Fixed
+
+- `answerCallback({ keyboard })` / keyboard-only edits via `editMessageWithOptions`.
+- `editMessageWithOptions` preserves prior keyboard when `keyboard` omitted.
+- Metrics: `http.request` / `http.rate_limited` / `admin.denied` / `update.timeout`
+  (dispatcher-side); `crypto.keys_query` on every engine keys/query POST
+  (`crypto.soft_budget` still tracks soft-budget delays).
+
 ## 0.7.0
 
 ### Added
@@ -14,8 +48,8 @@ semantic versioning.
 - **Aware callback toast** — with `clientProfile: "aware"`, `answerCallback({ text })` emits
   `dev.aiomatrix.callback_answer` instead of a timeline notice (`timeline: true` forces notice).
 - **First-class Redis helpers** — `createRedisSharedTokenStores`, `RedisStorage`, `RedisTtlStringMap`,
-  etc. in the main package. **No redis dependency**; pass any `RedisLike` client. Library works
-  without Redis. Optional peerDependency hint for `redis`.
+  etc. (**Moved to subpath `aiomatrix/redis` in 0.8.0** — not root exports.) **No redis dependency**;
+  pass any `RedisLike` client. Library works without Redis. Optional peerDependency hint for `redis`.
 - **Strict multi-host `!cb`** — `TtlStringMap.getAsync` + `resolveAsync` awaits Redis alias reads.
 - **`ctx.answerFile` / `replyPhoto` / `replyDocument`** — media helpers with caption/keyboard/reply.
 - **`ctx.kick` / `ban` / `invite` / `setPower`** — gated on the **bot's** power levels
@@ -43,7 +77,8 @@ semantic versioning.
 - **`BotHealth.cryptoHealth`**, **`bot.rotateMegolmNow(roomId)`** (share-cache invalidate only).
 - **`npx aiomatrix doctor`** — session/device/crypto checklist CLI (no secrets printed).
 - **`examples/template`** — minimal aware bot starter.
-- **`createOtelMetricHandler` / `createOtelRequestHandler`** — optional OTel-shaped adapters (no OTel dep).
+- **`createOtelMetricHandler` / `createOtelRequestHandler`** — optional OTel-*shaped* adapters
+  (no `@opentelemetry/*` dependency; wire your SDK in callbacks). **Moved to `aiomatrix/otel` in 0.8.0.**
 
 ### Notes
 

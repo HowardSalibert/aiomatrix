@@ -21,7 +21,7 @@ export const BOT_CAPABILITIES_SCHEMA_VERSION = 1;
 export interface BotCapabilitiesContent {
   version: number;
   /** Hosts that render `dev.aiomatrix.keyboard` natively. */
-  client_profile: "stock" | "aware";
+  client_profile: "stock" | "aware" | "hybrid";
   keyboard_fallback: boolean;
   parse_mode: "plain" | "markdown" | "html";
   mini_app: {
@@ -34,7 +34,7 @@ export interface BotCapabilitiesContent {
 }
 
 export interface BuildBotCapabilitiesOptions {
-  clientProfile?: "stock" | "aware";
+  clientProfile?: "stock" | "aware" | "hybrid";
   keyboardFallback?: boolean;
   parseMode?: "plain" | "markdown" | "html";
   topLevelUrl?: boolean;
@@ -49,7 +49,7 @@ export function buildBotCapabilitiesContent(
   options: BuildBotCapabilitiesOptions = {},
 ): BotCapabilitiesContent {
   const profile = options.clientProfile ?? "stock";
-  const aware = profile === "aware";
+  const aware = profile === "aware" || profile === "hybrid";
   return {
     version: BOT_CAPABILITIES_SCHEMA_VERSION,
     client_profile: profile,

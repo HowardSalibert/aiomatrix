@@ -124,14 +124,8 @@ export {
   createFileSharedTokenStores,
 } from "./file-ttl-map.js";
 export type { FileSharedTokenStores } from "./file-ttl-map.js";
-export {
-  RedisAsyncNonceStore,
-  RedisAsyncUsedTokenStore,
-  RedisStorage,
-  RedisTtlStringMap,
-  createRedisSharedTokenStores,
-} from "./redis-stores.js";
-export type { RedisLike, RedisSharedTokenStores } from "./redis-stores.js";
+// Redis / OTel adapters live behind subpath exports (`aiomatrix/redis`,
+// `aiomatrix/otel`) — not the root entry — so core stays free of adapter noise.
 export {
   AWARE_MESSAGE_DEFAULTS,
   AWARE_MINI_APP_DEFAULTS,
@@ -188,13 +182,7 @@ export type { HostCapabilitiesContent, ResolvedHostCapabilities } from "./host-c
 // ---------------------------------------------------------------- error map
 export { mapBotError } from "./error-map.js";
 
-// ----------------------------------------------------------------------- otel
-export { createOtelMetricHandler, createOtelRequestHandler } from "./otel.js";
-export type {
-  OtelAdapterOptions,
-  OtelLikeCounter,
-  OtelLikeHistogram,
-} from "./otel.js";
+// otel → `aiomatrix/otel` (not root)
 
 // --------------------------------------------------------------------- HTML
 export { MATRIX_ALLOWED_TAGS, fmt, html, markdownToHtml, sanitizeMatrixHtml } from "./html.js";
@@ -221,7 +209,7 @@ export type {
   MessageHandler,
   SendEventOptions,
 } from "./client.js";
-export { buildMessageContent, editMessageWithOptions, markdownFormattedOrUndefined, sendMessageWithOptions, tokenizeKeyboard, txnIdFromIdempotencyKey } from "./send.js";
+export { buildMessageContent, editMessageWithOptions, markdownFormattedOrUndefined, readExistingEffectiveContent, readExistingMessageSource, sendEventWithOutbox, sendMessageWithOptions, sendStateWithOutbox, tokenizeKeyboard, txnIdFromIdempotencyKey, isTransientSendError } from "./send.js";
 export type { MessageSource, SendTarget } from "./send.js";
 
 // --------------------------------------------------------------------- infra
@@ -289,6 +277,41 @@ export { Scheduler } from "./scheduler.js";
 export type { ScheduledJob, SchedulerOptions } from "./scheduler.js";
 export { ConsoleLogger, createDefaultLogger, parseLogLevel } from "./logger.js";
 export type { LogLevel, Logger } from "./logger.js";
+
+// ----------------------------------------------------------- 0.8 contracts
+export {
+  AIOMATRIX_SCHEMA_VERSION,
+  AIOMATRIX_EVENT_TYPES,
+  AIOMATRIX_CONTENT_KEYS,
+  AWARE_CONTRACT,
+  resolveCapabilityLevel,
+} from "./schema.js";
+export type { CapabilityLevel, ContractRequirement } from "./schema.js";
+export {
+  AIOMATRIX_SCHEMA,
+  checkSchemaVersion,
+  readSchemaVersion,
+} from "./schema-contract.js";
+export type { AiomatrixSchemaKey, SchemaVersionInfo } from "./schema-contract.js";
+export {
+  pipelineAiomatrixContent,
+  buildAiomatrixEnvelope,
+} from "./content-pipeline.js";
+export type { AiomatrixEnvelope } from "./content-pipeline.js";
+export { finalizeAiomatrixContent } from "./content-validate.js";
+export type { ContentValidation } from "./content-validate.js";
+export { COLD_START_DISPATCH, shouldDispatchOnColdStart } from "./cold-start.js";
+export type { ColdStartUpdateKind } from "./cold-start.js";
+export { StorageLock } from "./storage-lock.js";
+export type { StorageLockInfo } from "./storage-lock.js";
+export { FileOutboxStore, flushOutbox } from "./outbox.js";
+export type { OutboxEntry, OutboxOptions, OutboxStore } from "./outbox.js";
+export { definePlugin } from "./plugin.js";
+export type { BotPlugin, PluginContext } from "./plugin.js";
+export { canSendToRoom } from "./send-readiness.js";
+export type { RoomSendReadiness } from "./send-readiness.js";
+export { migrateStorage } from "./cli/migrate.js";
+export type { MigrateResult } from "./cli/migrate.js";
 
 // -------------------------------------------------------------------- media
 export {

@@ -56,6 +56,7 @@ describe("BotHealth.ok", () => {
       storagePath: dir,
       crypto: false,
       logger: silent,
+      storageLock: false,
       fetchImpl: async () =>
         new Response(JSON.stringify({ user_id: "@bot:example.org", device_id: "DEV" }), {
           status: 200,

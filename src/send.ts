@@ -2,6 +2,7 @@ import { htmlToPlainBody, type MatrixClient } from "./client.js";
 import { markdownToHtml } from "./html.js";
 import {
   KEYBOARD_CONTENT_KEY,
+  parseKeyboardContent,
   renderKeyboardFallback,
   type CallbackTokenStore,
   type InlineKeyboard,
@@ -9,7 +10,11 @@ import {
 } from "./keyboards.js";
 import type { ParseMode, SendOptions } from "./types.js";
 import { createHash } from "node:crypto";
-import { escapeHtml } from "./util.js";
+import { escapeHtml, isPlainObject } from "./util.js";
+import { finalizeAiomatrixContent } from "./content-validate.js";
+import type { OutboxStore } from "./outbox.js";
+import { RateLimitedError, RequestTimeoutError } from "./errors.js";
+import { MatrixApiError } from "./http.js";
 
 export interface MessageSource {
   /** Plain-text body. */
@@ -29,6 +34,10 @@ export interface SendTarget {
   threadRootId?: string | null;
   /** Restrict keyboard buttons to this user id. */
   callbackUserId?: string | null;
+  /** Optional outbox for transient send failures. */
+  outbox?: OutboxStore | null;
+  /** Called when schema validation warns (newer host fields). */
+  onContentWarn?: (warnings: string[]) => void;
 }
 
 /** Deterministic Matrix txn id from an opaque idempotency key (safe charset). */
@@ -102,6 +111,7 @@ export function buildMessageContent(
   }
 
   if (opts.extra) Object.assign(content, opts.extra);
+
   return { content, tokens };
 }
 
@@ -211,20 +221,88 @@ export async function sendMessageWithOptions(
 ): Promise<string> {
   const { content, tokens } = buildMessageContent(source, options, target);
   const txnId = resolveTxnId(options);
-  const eventId = await target.client.sendEvent(
-    target.roomId,
-    "m.room.message",
-    content,
-    txnId ? { txnId } : undefined,
-  );
+  const eventId = await sendEventWithOutbox(target, "m.room.message", content, txnId);
   if (tokens.length > 0) target.callbacks?.bindMessage(tokens, eventId);
   return eventId;
 }
 
 /**
+ * Send any room event; on transient failure enqueue to {@link SendTarget.outbox}
+ * when configured, then rethrow. Validates `dev.aiomatrix.*` schema versions.
+ */
+export async function sendEventWithOutbox(
+  target: SendTarget,
+  eventType: string,
+  content: Record<string, unknown>,
+  txnId?: string,
+): Promise<string> {
+  const validated = finalizeAiomatrixContent(content, { eventType });
+  if (validated.warnings.length > 0) target.onContentWarn?.(validated.warnings);
+  try {
+    return await target.client.sendEvent(
+      target.roomId,
+      eventType,
+      content,
+      txnId ? { txnId } : undefined,
+    );
+  } catch (err) {
+    if (target.outbox && isTransientSendError(err)) {
+      await target.outbox.enqueue({
+        roomId: target.roomId,
+        eventType,
+        content,
+        ...(txnId ? { txnId } : {}),
+      });
+    }
+    throw err;
+  }
+}
+
+/**
+ * Send a state event; enqueue to outbox on transient failure when configured.
+ * Flush retries via `sendStateEvent` when the entry carries `stateKey`.
+ */
+export async function sendStateWithOutbox(
+  target: SendTarget,
+  eventType: string,
+  stateKey: string,
+  content: Record<string, unknown>,
+): Promise<string> {
+  const validated = finalizeAiomatrixContent(content, { eventType });
+  if (validated.warnings.length > 0) target.onContentWarn?.(validated.warnings);
+  try {
+    return await target.client.sendStateEvent(target.roomId, eventType, stateKey, content);
+  } catch (err) {
+    if (target.outbox && isTransientSendError(err)) {
+      await target.outbox.enqueue({
+        roomId: target.roomId,
+        eventType,
+        content,
+        stateKey,
+      });
+    }
+    throw err;
+  }
+}
+
+export function isTransientSendError(err: unknown): boolean {
+  if (err instanceof RateLimitedError) return true;
+  if (err instanceof RequestTimeoutError) return true;
+  if (err instanceof MatrixApiError) {
+    return err.status === 429 || err.status >= 500 || err.status === 0;
+  }
+  if (err instanceof TypeError) return true;
+  if (err instanceof Error && /fetch|network|ECONN|ETIMEDOUT|socket/i.test(err.message)) {
+    return true;
+  }
+  return false;
+}
+
+/**
  * Edit a previously sent message, optionally replacing the inline keyboard.
  * Revokes tokens for the original event when a new keyboard is attached or
- * `keyboard: null` is passed.
+ * `keyboard: null` is passed. When `keyboard` is omitted, the previous
+ * `dev.aiomatrix.keyboard` is preserved (fetched from the homeserver).
  */
 export async function editMessageWithOptions(
   target: SendTarget,
@@ -241,10 +319,10 @@ export async function editMessageWithOptions(
     (source.text && parseMode !== "plain" ? formatPlain(source.text, parseMode) : null);
 
   let keyboardContent: KeyboardContent | null | undefined;
-  if (opts.keyboard === null) {
+  if (opts.keyboard === null || opts.keyboard?.isEmpty === true) {
     keyboardContent = null;
     target.callbacks?.revokeForMessage?.(eventId);
-  } else if (opts.keyboard && !opts.keyboard.isEmpty) {
+  } else if (opts.keyboard) {
     target.callbacks?.revokeForMessage?.(eventId);
     keyboardContent = tokenizeKeyboard(opts.keyboard, target, minted);
     if (opts.keyboardFallback !== false) {
@@ -255,6 +333,8 @@ export async function editMessageWithOptions(
         formatted = `${base}${fallback.html}`;
       }
     }
+  } else {
+    keyboardContent = await readExistingKeyboard(target, eventId);
   }
 
   const newContent: Record<string, unknown> = {
@@ -269,8 +349,8 @@ export async function editMessageWithOptions(
   if (opts.extra) Object.assign(newContent, opts.extra);
 
   const txnId = resolveTxnId(opts);
-  const replacementId = await target.client.sendEvent(
-    target.roomId,
+  const replacementId = await sendEventWithOutbox(
+    target,
     "m.room.message",
     {
       ...newContent,
@@ -284,8 +364,53 @@ export async function editMessageWithOptions(
       "m.new_content": newContent,
       "m.relates_to": { rel_type: "m.replace", event_id: eventId },
     },
-    txnId ? { txnId } : undefined,
+    txnId,
   );
   if (minted.length > 0) target.callbacks?.bindMessage(minted, eventId);
   return replacementId;
+}
+
+async function readExistingKeyboard(
+  target: SendTarget,
+  eventId: string,
+): Promise<KeyboardContent | undefined> {
+  const content = await readExistingEffectiveContent(target, eventId);
+  if (!content) return undefined;
+  const parsed = parseKeyboardContent(content, {
+    onWarn: target.onContentWarn,
+  });
+  return parsed ?? undefined;
+}
+
+/** Effective message content (follows `m.new_content` for edits). */
+export async function readExistingEffectiveContent(
+  target: SendTarget,
+  eventId: string,
+): Promise<Record<string, unknown> | null> {
+  try {
+    const event = await target.client.getEvent(target.roomId, eventId);
+    let content = isPlainObject(event.content) ? event.content : null;
+    if (content && isPlainObject(content["m.new_content"])) {
+      content = content["m.new_content"] as Record<string, unknown>;
+    }
+    return content;
+  } catch {
+    return null;
+  }
+}
+
+/** Plain/HTML source for an existing message (keyboard-only edits). */
+export async function readExistingMessageSource(
+  target: SendTarget,
+  eventId: string,
+): Promise<MessageSource> {
+  const content = await readExistingEffectiveContent(target, eventId);
+  if (!content) return { text: "" };
+  const html =
+    content.format === "org.matrix.custom.html" && typeof content.formatted_body === "string"
+      ? content.formatted_body
+      : undefined;
+  const text = typeof content.body === "string" ? content.body : "";
+  if (html !== undefined) return { html, text };
+  return { text };
 }

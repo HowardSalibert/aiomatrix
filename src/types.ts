@@ -67,8 +67,8 @@ export interface SendOptions {
   replyTo?: string | boolean;
   /** Send into a thread (`m.thread`). Pass `true` to use the current thread root. */
   thread?: string | boolean;
-  /** Attach an inline keyboard. */
-  keyboard?: InlineKeyboard;
+  /** Attach an inline keyboard. Pass `null` on edit to revoke/clear. */
+  keyboard?: InlineKeyboard | null;
   /**
    * Append plain-text / HTML keyboard fallback (`!cb …`, `<ol>`) for stock clients.
    * Default true. Aware clients that render `dev.aiomatrix.keyboard` should set
@@ -112,19 +112,26 @@ export interface MessageDefaults {
   parseMode?: ParseMode;
 }
 
-/** Preset for stock Element vs aware Matrix hosts. */
-export type ClientProfile = "stock" | "aware";
+/**
+ * Preset for stock Element vs aware Matrix hosts.
+ * `hybrid` — prefer aware lean/fallbacks when the room's host advertises
+ * `dev.aiomatrix.host`, otherwise stock-safe defaults.
+ */
+export type ClientProfile = "stock" | "aware" | "hybrid";
 
 /** Common surface of every context object. */
-export interface BaseContext<T extends UpdateType = UpdateType> {
+export interface BaseContext<T extends UpdateType = UpdateType, D extends ContextData = ContextData> {
   readonly updateType: T;
   readonly roomId: string;
   readonly event: MatrixEvent;
   readonly client: MatrixClient;
   readonly bot: Bot;
   readonly logger: Logger;
-  /** Middleware scratch space (`ctx.data.foo = …`). */
-  readonly data: ContextData;
+  /**
+   * Middleware scratch space (`ctx.data.foo = …`).
+   * Type with a second generic: `BaseContext<"message", { step: string }>`.
+   */
+  readonly data: D;
   readonly isDirect: boolean;
   /**
    * AbortSignal cancelled when the handler times out. Check before side effects
@@ -481,6 +488,7 @@ export type CryptoLogEvent =
   | { type: "withheld_detail"; roomId: string; eventType: string; bodyPreview: string }
   | { type: "peer_keys_missing"; roomId: string; peers: string[] }
   | { type: "encrypt_send"; roomId: string; eventType: string }
+  | { type: "keys_query" }
   | { type: "decrypt_failed"; roomId: string; eventId: string; queued: boolean; detail?: unknown }
   | { type: "decrypt_recovered"; roomId: string; eventId: string; attempts: number }
   | { type: "warn"; message: string; detail?: unknown }
@@ -623,9 +631,22 @@ export interface BotCreateOptions {
   /**
    * Host profile preset. `"aware"` turns off keyboard plaintext dumps and lean
    * MiniApp cards (see `AWARE_MESSAGE_DEFAULTS` / `AWARE_MINI_APP_DEFAULTS`).
+   * `"hybrid"` uses aware behaviour only when the room host advertises capabilities.
    * Explicit `messageDefaults` / `miniApp.*` still win.
    */
   clientProfile?: ClientProfile;
+  /**
+   * Exclusive `storagePath` lock (one writer). Default true.
+   * Disable only for intentional multi-process shared stores (Redis).
+   */
+  storageLock?: boolean;
+  /**
+   * Persist failed sends under `storagePath/outbox.json` and flush on start.
+   * Pass `true` for the file store, or an {@link import("./outbox.js").OutboxStore}.
+   */
+  outbox?: boolean | import("./outbox.js").OutboxStore;
+  /** Plugins installed via {@link Bot.use} / create options. */
+  plugins?: import("./plugin.js").BotPlugin[];
   /**
    * Sync age above which {@link BotHealth.ok} is false. Default 120_000 ms.
    */

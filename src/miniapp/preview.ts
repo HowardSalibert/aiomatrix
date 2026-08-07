@@ -1,4 +1,4 @@
-import { KEYBOARD_CONTENT_KEY } from "../keyboards.js";
+import { KEYBOARD_CONTENT_KEY, parseKeyboardContent } from "../keyboards.js";
 import { isPlainObject, readString } from "../util.js";
 import {
   MINI_APP_CONTENT_KEY,
@@ -97,7 +97,10 @@ export function formatMessagePreview(content: unknown): string | null {
  * One-shot receive helper for aware hosts: kind + preview + cleaned bodies +
  * structured fields. Returns `null` for ordinary Matrix messages.
  */
-export function normalizeAiomatrixContent(content: unknown): NormalizedAiomatrixContent | null {
+export function normalizeAiomatrixContent(
+  content: unknown,
+  options?: { onWarn?: (warnings: string[]) => void },
+): NormalizedAiomatrixContent | null {
   const kind = classifyAiomatrixContent(content);
   if (!kind || !isPlainObject(content)) return null;
   const preview = formatMessagePreview(content) ?? "";
@@ -114,7 +117,10 @@ export function normalizeAiomatrixContent(content: unknown): NormalizedAiomatrix
   }
   const out: NormalizedAiomatrixContent = { kind, preview, body };
   if (formattedBody) out.formattedBody = formattedBody;
-  if (content[KEYBOARD_CONTENT_KEY] != null) out.keyboard = content[KEYBOARD_CONTENT_KEY];
+  if (content[KEYBOARD_CONTENT_KEY] != null) {
+    out.keyboard =
+      parseKeyboardContent(content, { onWarn: options?.onWarn }) ?? content[KEYBOARD_CONTENT_KEY];
+  }
   if (content[MINI_APP_CONTENT_KEY] != null) out.miniApp = content[MINI_APP_CONTENT_KEY];
   if (content[MINI_APP_DATA_KEY] != null) out.miniAppData = content[MINI_APP_DATA_KEY];
   return out;

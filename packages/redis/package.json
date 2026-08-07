@@ -1,0 +1,13 @@
+{
+  "name": "@aiomatrix/redis",
+  "version": "0.8.0",
+  "private": true,
+  "description": "Redis adapters for aiomatrix (optional; peer redis)",
+  "type": "module",
+  "peerDependencies": {
+    "redis": ">=4.0.0"
+  },
+  "peerDependenciesMeta": {
+    "redis": { "optional": true }
+  }
+}

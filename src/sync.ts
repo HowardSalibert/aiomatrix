@@ -103,7 +103,14 @@ export interface SyncFilterOptions {
   stateTypes?: string[];
 }
 
-/** Cold start: no timeline at all, but full state so crypto/room caches warm up. */
+/** Cold start: no timeline at all, but full state so crypto/room caches warm up.
+ *
+ * Prefer {@link buildRuntimeFilter} for {@link SyncLoop}: cold-start safety is
+ * enforced by `isBootstrap` skip + `coldStartNotBeforeMs`, not by uploading this
+ * filter (a stuck timeline.limit:0 filter historically left bots deaf).
+ * Exported for custom sync loops that intentionally upload a bootstrap filter
+ * and switch to runtime after the first sync.
+ */
 export function buildBootstrapFilter(options: SyncFilterOptions = {}): Record<string, unknown> {
   return {
     presence: { limit: 0, types: [] },

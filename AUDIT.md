@@ -21,7 +21,12 @@ Problems found (confirmed gaps):
 
 ### Fixes
 
-- Bootstrap filter `timeline.limit: 0` + skip dispatch; persist `bootstrap_done`; then runtime filter limit 50.
+- Cold-start: first sync marked `isBootstrap`; timeline / invites not dispatched;
+  host capability state may warm caches only. Runtime filter stays at normal
+  `timeline.limit` (see `buildRuntimeFilter`). `buildBootstrapFilter` remains
+  available for custom sync loops that intentionally upload a limit:0 filter
+  and switch after the first sync — SyncLoop itself does **not** use it
+  (a stuck bootstrap filter historically left bots deaf).
 - `normalizeToDeviceBody` in send path.
 - Collect track users / await `updateTrackedUsers` after `receiveSync`.
 - Cache `m.room.history_visibility`; feed into `EncryptionSettings`.
@@ -34,7 +39,7 @@ Problems found (confirmed gaps):
 
 ### Cycle 1 residual
 
-- Live HS smoke for bootstrap filter + autojoin + Megolm share (human-only).
+- Live HS smoke for cold-start + autojoin + Megolm share (CI live job / human).
 - KeysBackup intentionally skipped (no backup setup).
 
 ---
@@ -246,15 +251,16 @@ green, surface list (`crypto.ts`, `crypto-guard.ts`, MiniApp HMAC, callback toke
 
 ---
 
-## Final residual risks
+## Final residual risks (accepted for 0.8)
 
 | Risk | Status |
 |---|---|
-| History flood on real HS | Covered by live cold-start test |
+| History flood on real HS | Covered by live cold-start test + bootstrap skip |
 | Megolm decrypt with peers | Covered by live Megolm round-trip |
 | Token expiry mid-run | Covered by live refresh + password relogin; revoked→fatal with `autoReloginOnAuthFailure: false` |
-| Autojoin ACL / knock rooms | Still server-policy dependent (human) |
-| Key backup against a real backup version | Upload failures no longer ack'd as sent; full version restore still not in live CI |
-| Independent third-party security audit | Not a code deliverable; reporting channel in SECURITY.md |
+| Autojoin ACL / knock rooms | **Accepted risk** — still server-policy dependent (human) |
+| Key backup against a real backup version | **Accepted risk** — upload failures no longer ack'd as sent; full version restore still not in live CI |
+| Independent third-party security audit | **Accepted risk** — not a code deliverable; reporting channel in SECURITY.md |
+| MiniApp no real-client IT (Cycle 7) | **Accepted risk** — bridge tested against DOM stub |
 | Unsigned callback forge | Closed in 0.6.0 (`allowUnsignedCallbacks` opt-in) |
 | Large-room Megolm share storm | Mitigated by `rotateEveryMessageMaxPeers` (default 32) |

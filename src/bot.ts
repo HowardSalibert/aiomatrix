@@ -56,12 +56,13 @@ import {
   pollStartEventType,
   type SendPollOptions,
 } from "./polls.js";
+import { shouldDispatchOnColdStart, type ColdStartUpdateKind } from "./cold-start.js";
 import {
   HOST_CAPABILITIES_STATE_EVENT_TYPE,
   parseHostCapabilities,
   type ResolvedHostCapabilities,
 } from "./host-capabilities.js";
-import { editMessageWithOptions, sendMessageWithOptions } from "./send.js";
+import { editMessageWithOptions, sendEventWithOutbox, sendMessageWithOptions, sendStateWithOutbox } from "./send.js";
 import type { Middleware, WaitForOptions } from "./types.js";
 import {
   buildMiniAppContent,
@@ -87,6 +88,11 @@ import {
   type WidgetOptions,
 } from "./miniapp/widget.js";
 import { Scheduler } from "./scheduler.js";
+import { resolveCapabilityLevel, type CapabilityLevel } from "./schema.js";
+import { StorageLock } from "./storage-lock.js";
+import { FileOutboxStore, flushOutbox, type OutboxStore } from "./outbox.js";
+import { definePlugin, type BotPlugin } from "./plugin.js";
+import { canSendToRoom, type RoomSendReadiness } from "./send-readiness.js";
 import type {
   AnyContext,
   BotCreateOptions,
@@ -227,6 +233,10 @@ export class Bot {
   private syncStaleNotified = false;
   private readonly hostCapabilitiesByRoom = new Map<string, ResolvedHostCapabilities>();
   private readonly cryptoHealth: BotCryptoHealth;
+  private readonly storageLock: StorageLock | null = null;
+  private readonly outbox: OutboxStore | null = null;
+  private readonly plugins: BotPlugin[] = [];
+  private pluginInstallQueue: Promise<void> = Promise.resolve();
   private readonly waiters: Array<{
     filter: (ctx: AnyContext) => boolean | Promise<boolean>;
     roomId: string | null;
@@ -244,6 +254,8 @@ export class Bot {
     options: BotCreateOptions;
     configuredDeviceId?: string;
     cryptoHealth?: BotCryptoHealth;
+    storageLock?: StorageLock | null;
+    outbox?: OutboxStore | null;
   }) {
     this.cryptoHealth = params.cryptoHealth ?? {
       shareRoomKeyCount: 0,
@@ -257,6 +269,11 @@ export class Bot {
     this.cryptoEnabled = params.cryptoEnabled;
     this.logger = params.logger.child("bot");
     this.options = params.options;
+    this.storageLock = params.storageLock ?? null;
+    this.outbox = params.outbox ?? null;
+    if (params.options.plugins) {
+      for (const p of params.options.plugins) this.plugins.push(definePlugin(p));
+    }
     if (params.configuredDeviceId !== undefined) {
       this.configuredDeviceId = params.configuredDeviceId;
     }
@@ -374,17 +391,89 @@ export class Bot {
           name: "crypto.encrypt_send",
           labels: { roomId: event.roomId },
         });
+      } else if (event.type === "keys_query") {
+        emitMetric(options.onMetric, { name: "crypto.keys_query" });
       } else if (event.type === "warn" && String(event.message).includes("soft budget")) {
         cryptoHealth.softBudgetHits += 1;
-        emitMetric(options.onMetric, { name: "crypto.soft_budget" });
+        // Metrics emitted from softBudget.onSoftBudget wrapper (avoids double-count).
       }
       options.onCryptoLog?.(event);
     };
+    const userOnRequest = options.onRequest;
+    const onRequest = (info: {
+      method: string;
+      path: string;
+      status: number | null;
+      durationMs: number;
+      attempt: number;
+      retried: boolean;
+      error?: unknown;
+    }): void => {
+      emitMetric(options.onMetric, {
+        name: "http.request",
+        value: info.durationMs,
+        labels: {
+          method: info.method,
+          status: info.status ?? 0,
+          path: info.path.split("?")[0] ?? info.path,
+        },
+      });
+      if (info.status === 429) {
+        emitMetric(options.onMetric, {
+          name: "http.rate_limited",
+          value: info.durationMs,
+          labels: { method: info.method, path: info.path.split("?")[0] ?? info.path },
+        });
+      }
+      userOnRequest?.(info);
+    };
+    const softBudget = options.encryption?.softBudget;
+    const encryption = options.encryption
+      ? {
+          ...options.encryption,
+          ...(softBudget
+            ? {
+                softBudget: {
+                  ...softBudget,
+                  onSoftBudget: (
+                    info: {
+                      kind: "share_room_key" | "keys_query";
+                      delayMs: number;
+                      count: number;
+                      limit: number;
+                    },
+                  ) => {
+                    softBudget.onSoftBudget?.(info);
+                    emitMetric(options.onMetric, {
+                      name: "crypto.soft_budget",
+                      value: info.delayMs,
+                      labels: { kind: info.kind },
+                    });
+                    // keys_query count is emitted from CryptoEngine after the real POST.
+                  },
+                },
+              }
+            : {}),
+        }
+      : options.encryption;
     const created = await createMatrixClient({
       ...options,
+      ...(encryption ? { encryption } : {}),
       logger,
       onCryptoLog: noteCrypto,
+      onRequest,
     });
+    let storageLock: StorageLock | null = null;
+    if (options.storageLock !== false) {
+      storageLock = new StorageLock(created.storagePath);
+      storageLock.acquire();
+    }
+    let outbox: OutboxStore | null = null;
+    if (options.outbox === true) {
+      outbox = new FileOutboxStore(created.storagePath);
+    } else if (options.outbox && typeof options.outbox === "object") {
+      outbox = options.outbox;
+    }
     const bot = new Bot({
       client: created.client,
       storagePath: created.storagePath,
@@ -392,10 +481,15 @@ export class Bot {
       logger,
       options,
       cryptoHealth,
+      storageLock,
+      outbox,
       ...(created.configuredDeviceId !== undefined
         ? { configuredDeviceId: created.configuredDeviceId }
         : {}),
     });
+    for (const plugin of bot.plugins) {
+      await plugin.install(bot, { logger: bot.logger, storagePath: bot.storagePath });
+    }
     return bot;
   }
 
@@ -422,9 +516,40 @@ export class Bot {
     return this.client.crypto?.clientDeviceId ?? this.configuredDeviceId ?? null;
   }
 
-  /** Effective client profile (`stock` when unset). */
-  get clientProfile(): "stock" | "aware" {
-    return this.options.clientProfile === "aware" ? "aware" : "stock";
+  /** Effective client profile (`stock` when unset). Configured level, not per-room. */
+  get clientProfile(): CapabilityLevel {
+    return this.options.clientProfile ?? "stock";
+  }
+
+  /**
+   * Install a plugin (stores, metrics, middleware wiring). Prefer
+   * `BotCreateOptions.plugins` so install runs before `start`.
+   * Async `install` is queued and awaited at `start`.
+   */
+  use(plugin: BotPlugin): this {
+    const p = definePlugin(plugin);
+    this.plugins.push(p);
+    this.pluginInstallQueue = this.pluginInstallQueue.then(async () => {
+      await p.install(this, { logger: this.logger, storagePath: this.storagePath });
+    });
+    // Keep the chain alive; `start` awaits and surfaces the rejection.
+    this.pluginInstallQueue.catch(() => undefined);
+    return this;
+  }
+
+  /** Crypto / peer-key readiness for sending into a room. */
+  canSendToRoom(roomId: string): Promise<RoomSendReadiness> {
+    return canSendToRoom(this.client, roomId);
+  }
+
+  /** Active outbox store when `outbox: true` (or custom) was set at create. */
+  get outboxStore(): OutboxStore | null {
+    return this.outbox;
+  }
+
+  /** Emit an optional metric (no-op when `onMetric` unset). */
+  noteMetric(metric: import("./metrics.js").BotMetric): void {
+    emitMetric(this.options.onMetric, metric);
   }
 
   /**
@@ -495,10 +620,17 @@ export class Bot {
     if (this.started) throw new ConfigurationError("Bot already started");
     this.stopping = false;
     this.dispatcher = dispatcher;
+    await this.pluginInstallQueue;
 
     if (this.options.handlerTimeoutMs) {
       dispatcher.setHandlerTimeout(this.options.handlerTimeoutMs);
     }
+    dispatcher.setOnTimeout((ctx) => {
+      emitMetric(this.options.onMetric, {
+        name: "update.timeout",
+        labels: { type: ctx.updateType },
+      });
+    });
     this.commands.addAll(dispatcher.commandSpecs);
 
     if (this.cryptoEnabled) await this.verifyCryptoContract();
@@ -553,6 +685,21 @@ export class Bot {
     });
 
     this.started = true;
+    for (const plugin of this.plugins) {
+      await plugin.onStart?.(this, dispatcher);
+    }
+    if (this.outbox) {
+      const result = await flushOutbox({
+        store: this.outbox,
+        send: (roomId, eventType, content, txnId, stateKey) =>
+          stateKey !== undefined
+            ? this.client.sendStateEvent(roomId, eventType, stateKey, content)
+            : this.client.sendEvent(roomId, eventType, content, txnId ? { txnId } : undefined),
+      });
+      if (result.sent || result.dropped) {
+        this.logger.info(`outbox flush: sent=${result.sent} dropped=${result.dropped}`);
+      }
+    }
     this.syncStaleNotified = false;
     if (this.options.onSyncStale) {
       this.syncWatchTimer = setInterval(() => {
@@ -622,10 +769,18 @@ export class Bot {
       clearInterval(this.syncWatchTimer);
       this.syncWatchTimer = null;
     }
+    for (const plugin of this.plugins) {
+      try {
+        await plugin.onStop?.(this);
+      } catch (err) {
+        this.logger.warn(`plugin ${plugin.name} onStop failed`, err);
+      }
+    }
     this.scheduler.stop();
     await this.client.stop();
     await this.client.crypto?.close();
     this.durableStores?.flush();
+    this.storageLock?.release();
     this.started = false;
     this.logger.info("stopped");
   }
@@ -659,21 +814,41 @@ export class Bot {
   getHostCapabilities(roomId: string): ResolvedHostCapabilities {
     const cached = this.hostCapabilitiesByRoom.get(roomId);
     if (cached) return cached;
+    const level = resolveCapabilityLevel(this.clientProfile, false);
     return parseHostCapabilities(
-      this.clientProfile === "aware"
-        ? { client_profile: "aware" }
-        : { client_profile: "stock" },
+      level === "aware" ? { client_profile: "aware" } : { client_profile: "stock" },
     );
   }
 
   /**
-   * Safely force Megolm re-share for a room (invalidates share cache then
-   * encrypts a no-op notice is NOT sent — call before your next real send).
-   * Does not prune devices or touch other rooms.
+   * Effective lean/stock mode for a room (`hybrid` consults host capabilities).
+   */
+  capabilityForRoom(roomId: string): "stock" | "aware" {
+    const host = this.getHostCapabilities(roomId);
+    const hostAware =
+      host.profile === "aware" ||
+      host.keyboardNative ||
+      host.toast ||
+      host.progress ||
+      host.pollUi ||
+      host.miniApp;
+    return resolveCapabilityLevel(this.clientProfile, hostAware);
+  }
+
+  /**
+   * Invalidate Megolm share cache for a room so the next encrypt re-shares.
+   * Does not send a message or prune devices — call before your next real send.
+   */
+  invalidateMegolmShare(roomId: string): void {
+    this.client.crypto?.invalidateRoomShare(roomId);
+    this.logger.info(`invalidateMegolmShare: invalidated share cache for ${roomId}`);
+  }
+
+  /**
+   * @deprecated Use {@link invalidateMegolmShare}. Cache-invalidate only — does not encrypt/send.
    */
   rotateMegolmNow(roomId: string): void {
-    this.client.crypto?.invalidateRoomShare(roomId);
-    this.logger.info(`rotateMegolmNow: invalidated share cache for ${roomId}`);
+    this.invalidateMegolmShare(roomId);
   }
 
   /** Edit a bot message with full {@link SendOptions} (keyboard, parseMode, …). */
@@ -684,20 +859,24 @@ export class Bot {
     options?: SendOptions,
   ): Promise<string> {
     return editMessageWithOptions(
-      { client: this.client, roomId, callbacks: this.callbacks },
+      this.messageSendTarget(roomId),
       eventId,
       { text },
-      { ...this.effectiveMessageDefaults(), ...options },
+      { ...this.effectiveMessageDefaults(roomId), ...options },
     );
   }
 
   /**
    * Effective send defaults. `parseMode: "markdown"` is on unless overridden.
    * `clientProfile: "aware"` applies {@link AWARE_MESSAGE_DEFAULTS}.
+   * For `hybrid`, pass `roomId` so host capabilities can flip lean mode.
    */
-  effectiveMessageDefaults(): MessageDefaults {
-    const aware =
-      this.options.clientProfile === "aware" ? AWARE_MESSAGE_DEFAULTS : null;
+  effectiveMessageDefaults(roomId?: string): MessageDefaults {
+    const level =
+      roomId !== undefined
+        ? this.capabilityForRoom(roomId)
+        : resolveCapabilityLevel(this.clientProfile, this.clientProfile === "aware");
+    const aware = level === "aware" ? AWARE_MESSAGE_DEFAULTS : null;
     return {
       parseMode: "markdown",
       ...aware,
@@ -706,9 +885,12 @@ export class Bot {
   }
 
   /** MiniApp card defaults after `clientProfile` / explicit `miniApp.*`. */
-  effectiveMiniAppDefaults(): Partial<MiniAppCardOptions> {
-    const aware =
-      this.options.clientProfile === "aware" ? { ...AWARE_MINI_APP_DEFAULTS } : {};
+  effectiveMiniAppDefaults(roomId?: string): Partial<MiniAppCardOptions> {
+    const level =
+      roomId !== undefined
+        ? this.capabilityForRoom(roomId)
+        : resolveCapabilityLevel(this.clientProfile, this.clientProfile === "aware");
+    const aware = level === "aware" ? { ...AWARE_MINI_APP_DEFAULTS } : {};
     const configured = this.options.miniApp ?? {};
     return {
       ...aware,
@@ -786,7 +968,15 @@ export class Bot {
       typeof event.state_key === "string"
     ) {
       this.hostCapabilitiesByRoom.set(roomId, parseHostCapabilities(event.content));
+      // Cache only — never feed routers (bootstrap or live updates).
+      return;
     }
+
+    const coldKind = coldStartKindForEvent(event);
+    if (meta.bootstrap === true && !shouldDispatchOnColdStart(coldKind, true)) {
+      return;
+    }
+
     // The bot's own echoes are never updates; handlers that need them can read
     // the timeline explicitly.
     if (event.sender === this.selfId) return;
@@ -802,6 +992,7 @@ export class Bot {
       });
     } catch (err) {
       if (this.stopping) return;
+      // Timeouts are metered in Dispatcher.setOnTimeout (survives error handlers).
       emitMetric(this.options.onMetric, { name: "update.error" });
       this.logger.error(`unhandled dispatch error in ${roomId}`, err);
     }
@@ -938,21 +1129,33 @@ export class Bot {
 
   // ---------------------------------------------------------------- helpers
 
+  private messageSendTarget(roomId: string): import("./send.js").SendTarget {
+    return {
+      client: this.client,
+      roomId,
+      callbacks: this.callbacks,
+      outbox: this.outbox,
+      onContentWarn: (warnings) => {
+        this.logger.warn(`aiomatrix content schema: ${warnings.join("; ")}`);
+      },
+    };
+  }
+
   /** Send a plain-text message with the full {@link SendOptions} surface. */
   sendMessage(roomId: string, text: string, options?: SendOptions): Promise<string> {
     return sendMessageWithOptions(
-      { client: this.client, roomId, callbacks: this.callbacks },
+      this.messageSendTarget(roomId),
       { text },
-      { ...this.effectiveMessageDefaults(), ...options },
+      { ...this.effectiveMessageDefaults(roomId), ...options },
     );
   }
 
   /** Send an HTML message (plain-text fallback derived automatically). */
   sendHtml(roomId: string, html: string, options?: SendOptions): Promise<string> {
     return sendMessageWithOptions(
-      { client: this.client, roomId, callbacks: this.callbacks },
+      this.messageSendTarget(roomId),
       { html },
-      { ...this.effectiveMessageDefaults(), ...options },
+      { ...this.effectiveMessageDefaults(roomId), ...options },
     );
   }
 
@@ -974,10 +1177,10 @@ export class Bot {
   async sendPoll(roomId: string, options: SendPollOptions): Promise<string> {
     const leanBody =
       options.leanBody ??
-      (this.clientProfile === "aware" || this.getHostCapabilities(roomId).pollUi);
+      (this.capabilityForRoom(roomId) === "aware" || this.getHostCapabilities(roomId).pollUi);
     const content = buildPollStartContent({ ...options, leanBody });
-    return this.client.sendEvent(
-      roomId,
+    return sendEventWithOutbox(
+      this.messageSendTarget(roomId),
       pollStartEventType(options.useUnstableType !== false),
       content,
     );
@@ -989,8 +1192,8 @@ export class Bot {
     pollEventId: string,
     options?: { useUnstableType?: boolean },
   ): Promise<string> {
-    return this.client.sendEvent(
-      roomId,
+    return sendEventWithOutbox(
+      this.messageSendTarget(roomId),
       pollEndEventType(options?.useUnstableType !== false),
       buildPollEndContent(pollEventId),
     );
@@ -1076,8 +1279,8 @@ export class Bot {
    * slash-autocomplete without hard-coding anything.
    */
   async advertiseCommands(roomId: string): Promise<string> {
-    const eventId = await this.client.sendStateEvent(
-      roomId,
+    const eventId = await sendStateWithOutbox(
+      this.messageSendTarget(roomId),
       COMMANDS_STATE_EVENT_TYPE,
       this.selfId,
       buildCommandsStateContent(this.commands.list()),
@@ -1092,10 +1295,10 @@ export class Bot {
 
   /** Publish `dev.aiomatrix.bot` so aware hosts can detect keyboard/MiniApp contract. */
   async advertiseCapabilities(roomId: string): Promise<string> {
-    const defaults = this.effectiveMessageDefaults();
-    const mini = this.effectiveMiniAppDefaults();
-    return this.client.sendStateEvent(
-      roomId,
+    const defaults = this.effectiveMessageDefaults(roomId);
+    const mini = this.effectiveMiniAppDefaults(roomId);
+    return sendStateWithOutbox(
+      this.messageSendTarget(roomId),
       BOT_CAPABILITIES_STATE_EVENT_TYPE,
       this.selfId,
       buildBotCapabilitiesContent({
@@ -1245,14 +1448,12 @@ export class Bot {
     try {
       return await sendMessageWithOptions(
         {
-          client: this.client,
-          roomId: record.roomId,
-          callbacks: this.callbacks,
+          ...this.messageSendTarget(record.roomId),
           triggerEventId: record.messageId,
           callbackUserId: record.userId,
         },
         options?.html ? { html: options.html } : { text },
-        { ...this.effectiveMessageDefaults(), ...options },
+        { ...this.effectiveMessageDefaults(record.roomId), ...options },
       );
     } catch (err) {
       // Let the mini app retry rather than burning the query on a transient error.
@@ -1327,31 +1528,30 @@ export class Bot {
     roomId: string,
     options: Omit<WidgetOptions, "creatorUserId"> & { layout?: boolean },
   ): Promise<string> {
-    const eventId = await this.client.sendStateEvent(
-      roomId,
+    const target = this.messageSendTarget(roomId);
+    const eventId = await sendStateWithOutbox(
+      target,
       WIDGET_STATE_EVENT_TYPE,
       options.widgetId,
       buildWidgetStateContent({ ...options, creatorUserId: this.selfId }),
     );
     if (options.layout !== false) {
-      await this.client
-        .sendStateEvent(
-          roomId,
-          "io.element.widgets.layout",
-          "",
-          buildWidgetLayoutContent(options.widgetId),
-        )
-        .catch((err: unknown) => {
-          this.logger.debug("could not set the widget layout", err);
-        });
+      await sendStateWithOutbox(
+        target,
+        "io.element.widgets.layout",
+        "",
+        buildWidgetLayoutContent(options.widgetId),
+      ).catch((err: unknown) => {
+        this.logger.debug("could not set the widget layout", err);
+      });
     }
     return eventId;
   }
 
   /** Remove a previously pinned widget. */
   async removeWidget(roomId: string, widgetId: string): Promise<string> {
-    return this.client.sendStateEvent(
-      roomId,
+    return sendStateWithOutbox(
+      this.messageSendTarget(roomId),
       WIDGET_STATE_EVENT_TYPE,
       widgetId,
       buildWidgetRemovalContent(),
@@ -1362,4 +1562,21 @@ export class Bot {
   static keyboard(): InlineKeyboard {
     return new InlineKeyboard();
   }
+}
+
+function coldStartKindForEvent(event: MatrixEvent): ColdStartUpdateKind {
+  if (event.type === HOST_CAPABILITIES_STATE_EVENT_TYPE) return "host_capabilities_state";
+  if (event.type === "m.reaction") return "reaction";
+  if (event.type === "m.room.redaction") return "redaction";
+  if (event.type === "m.room.member") return "membership";
+  if (event.type === "dev.aiomatrix.callback") return "callback_query";
+  if (event.type === "dev.aiomatrix.mini_app_data") return "mini_app_data";
+  if (typeof event.content === "object" && event.content && "m.relates_to" in event.content) {
+    const rel = (event.content as Record<string, unknown>)["m.relates_to"];
+    if (rel && typeof rel === "object" && (rel as { rel_type?: string }).rel_type === "m.replace") {
+      return "edited_message";
+    }
+  }
+  if (event.type === "m.room.message" || event.type === "m.sticker") return "message";
+  return "raw_event";
 }

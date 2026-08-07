@@ -38,6 +38,8 @@ import {
 import { SyncLoop, type JoinedRoomSync, type SyncResponse } from "./sync.js";
 import type { BotCreateOptions, MatrixEvent, MatrixMessageEvent } from "./types.js";
 import { escapeHtml, isPlainObject, readString, resolveStoragePath } from "./util.js";
+import { shouldDispatchOnColdStart } from "./cold-start.js";
+import { HOST_CAPABILITIES_STATE_EVENT_TYPE } from "./host-capabilities.js";
 
 export interface CreatedClient {
   client: MatrixClient;
@@ -57,6 +59,11 @@ export interface ClientEventMeta {
   decrypted: boolean;
   /** True when the event was recovered by a late Megolm key. */
   lateDecrypt: boolean;
+  /**
+   * True only for the first sync bootstrap (not timeline gaps).
+   * Used with {@link import("./cold-start.js").shouldDispatchOnColdStart}.
+   */
+  bootstrap?: boolean;
 }
 
 export interface ClientHandlers {
@@ -912,6 +919,10 @@ export class MatrixClient {
 
   /**
    * Upload and post a file. Encrypted rooms get an encrypted attachment.
+   *
+   * Low-level Client-Server helper — **no outbox**. Prefer `ctx.answerFile` /
+   * `ctx.replyPhoto` / `ctx.replyDocument` (or bot send helpers) when
+   * `BotCreateOptions.outbox` is enabled so transient failures enqueue.
    */
   async sendFile(
     roomId: string,
@@ -1117,7 +1128,11 @@ export class MatrixClient {
     for (const [roomId, invite] of invites) {
       const events = (invite.invite_state?.events ?? []) as MatrixEvent[];
       for (const event of events) this.rooms.applyStateEvent(roomId, event);
-      this.handlers.onInvite?.(roomId, events);
+      // COLD_START_DISPATCH.invite = after_bootstrap — do not dispatch invites
+      // during the first sync, but still allow autojoin.
+      if (!meta.isBootstrap) {
+        this.handlers.onInvite?.(roomId, events);
+      }
       if (this.autojoin && this.shouldAutojoin(roomId, events)) {
         try {
           await this.joinRoom(roomId);
@@ -1169,11 +1184,10 @@ export class MatrixClient {
       await this.refreshRoomCryptoState(roomId);
     }
 
-    const membershipEvents: MatrixEvent[] = [];
     const trackUsers: string[] = [];
     let encryptionAppeared = false;
 
-    const applyEvent = (event: Record<string, unknown>, fromState: boolean): void => {
+    const applyEvent = (event: Record<string, unknown>): void => {
       if (typeof event.state_key === "string") {
         this.rooms.applyStateEvent(roomId, event);
       }
@@ -1181,22 +1195,23 @@ export class MatrixClient {
       if (event.type === "m.room.member" && typeof event.state_key === "string") {
         const membership = readString(event.content, "membership");
         if (membership === "join" || membership === "invite") trackUsers.push(event.state_key);
-        if (!fromState) membershipEvents.push(event as MatrixEvent);
       }
     };
 
-    for (const event of room.state?.events ?? []) applyEvent(event, true);
+    for (const event of room.state?.events ?? []) applyEvent(event);
     if (isNewRoom || isBootstrap) this.rooms.markStateSynced(roomId);
 
     const timeline = room.timeline?.events ?? [];
-    for (const event of timeline) applyEvent(event, false);
+    for (const event of timeline) applyEvent(event);
 
-    // Aware-host capability state must be visible even when it only appears in
-    // the state block (not the timeline).
+    // Host capability state: deliver for bot cache warm only (Bot.feedRoomEvent
+    // updates hostCapabilitiesByRoom and does not route to handlers).
     for (const event of room.state?.events ?? []) {
-      if (event.type === "dev.aiomatrix.host") {
+      if (event.type === HOST_CAPABILITIES_STATE_EVENT_TYPE) {
+        if (!shouldDispatchOnColdStart("host_capabilities_state", isBootstrap)) continue;
         this.handlers.onRoomEvent?.(roomId, event as MatrixEvent, {
           historical: isBootstrap,
+          bootstrap: isBootstrap,
           decrypted: false,
           lateDecrypt: false,
         });
@@ -1213,6 +1228,7 @@ export class MatrixClient {
     }
 
     // Bootstrap: warm crypto/state only, never replay history into handlers.
+    // Normative: COLD_START_DISPATCH (message/callback/… = after_bootstrap).
     if (isBootstrap) return;
 
     for (const event of timeline) {

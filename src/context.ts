@@ -8,23 +8,26 @@ import {
 } from "./errors.js";
 import { FSMContext, type Storage } from "./fsm.js";
 import {
-  markdownFormattedOrUndefined,
   sendMessageWithOptions,
   editMessageWithOptions,
+  sendEventWithOutbox,
+  readExistingMessageSource,
   tokenizeKeyboard,
   type SendTarget,
 } from "./send.js";
+import { AIOMATRIX_SCHEMA } from "./schema-contract.js";
 import {
   CALLBACK_ANSWER_EVENT_TYPE,
   KEYBOARD_CONTENT_KEY,
   PROGRESS_EVENT_TYPE,
   TOAST_EVENT_TYPE,
+  renderKeyboardFallback,
   type CallbackTokenStore,
   type InlineKeyboard,
 } from "./keyboards.js";
+import { buildMediaInfo, guessMimeType, msgtypeForMime, readAttachmentFromContent } from "./media.js";
 import type { ResolvedHostCapabilities } from "./host-capabilities.js";
 import type { Logger } from "./logger.js";
-import { readAttachmentFromContent } from "./media.js";
 import { buildMiniAppDataContent } from "./miniapp/events.js";
 import type { Membership, PowerLevels } from "./room-cache.js";
 import type {
@@ -99,6 +102,13 @@ abstract class ContextBase<T extends UpdateType> implements BaseContext<T> {
     return this.abortController.signal;
   }
 
+  protected roomCapability(): "stock" | "aware" {
+    if (typeof this.deps.bot.capabilityForRoom === "function") {
+      return this.deps.bot.capabilityForRoom(this.roomId);
+    }
+    return this.deps.bot.clientProfile === "aware" ? "aware" : "stock";
+  }
+
   get client(): MatrixClient {
     return this.deps.client;
   }
@@ -138,6 +148,7 @@ abstract class ContextBase<T extends UpdateType> implements BaseContext<T> {
   /** Target used by every send helper on this context. */
   protected sendTarget(): SendTarget {
     this.assertWritable();
+    const outbox = this.deps.bot.outboxStore;
     return {
       client: this.deps.client,
       roomId: this.roomId,
@@ -145,6 +156,10 @@ abstract class ContextBase<T extends UpdateType> implements BaseContext<T> {
       triggerEventId: this.eventId || null,
       threadRootId: this.threadRoot(),
       callbackUserId: this.senderId || null,
+      ...(outbox ? { outbox } : {}),
+      onContentWarn: (warnings) => {
+        this.deps.logger.warn(`aiomatrix content schema: ${warnings.join("; ")}`);
+      },
     };
   }
 
@@ -155,7 +170,11 @@ abstract class ContextBase<T extends UpdateType> implements BaseContext<T> {
 
   /** Merge bot-level {@link MessageDefaults} under per-call options. */
   protected withDefaults(options?: SendOptions): SendOptions | undefined {
-    const defaults = this.deps.messageDefaults;
+    const botDefaults =
+      typeof this.deps.bot.effectiveMessageDefaults === "function"
+        ? this.deps.bot.effectiveMessageDefaults(this.roomId)
+        : undefined;
+    const defaults = botDefaults ?? this.deps.messageDefaults;
     if (!defaults) return options;
     return {
       ...(defaults.keyboardFallback !== undefined
@@ -246,10 +265,11 @@ abstract class ContextBase<T extends UpdateType> implements BaseContext<T> {
   ): Promise<string> {
     const useEvent =
       options?.forceEvent === true ||
-      this.deps.bot.clientProfile === "aware" ||
+      this.roomCapability() === "aware" ||
       this.hostCapabilities().toast;
     if (useEvent) {
-      return this.deps.client.sendEvent(this.roomId, TOAST_EVENT_TYPE, {
+      return sendEventWithOutbox(this.sendTarget(), TOAST_EVENT_TYPE, {
+        version: AIOMATRIX_SCHEMA.toast,
         text,
         alert: options?.alert === true,
         user_id: options?.userId ?? this.senderId,
@@ -268,10 +288,11 @@ abstract class ContextBase<T extends UpdateType> implements BaseContext<T> {
   ): Promise<string> {
     const useEvent =
       options?.forceEvent === true ||
-      this.deps.bot.clientProfile === "aware" ||
+      this.roomCapability() === "aware" ||
       this.hostCapabilities().progress;
     if (useEvent) {
-      return this.deps.client.sendEvent(this.roomId, PROGRESS_EVENT_TYPE, {
+      return sendEventWithOutbox(this.sendTarget(), PROGRESS_EVENT_TYPE, {
+        version: AIOMATRIX_SCHEMA.progress,
         text,
         percent: options?.percent ?? null,
         user_id: this.senderId,
@@ -322,8 +343,36 @@ abstract class ContextBase<T extends UpdateType> implements BaseContext<T> {
     reply: boolean,
   ): Promise<string> {
     const target = this.sendTarget();
+    const opts = this.withDefaults({
+      ...(options.keyboard !== undefined ? { keyboard: options.keyboard } : {}),
+      ...(options.extra !== undefined ? { extra: options.extra } : {}),
+    });
     const minted: string[] = [];
-    const extra: Record<string, unknown> = { ...(options.extra ?? {}) };
+    const contentType = options.contentType ?? guessMimeType(options.filename);
+    const { upload, file } = await this.deps.client.uploadContent(data, {
+      filename: options.filename,
+      contentType,
+      encryptForRoom: this.roomId,
+    });
+    const info = buildMediaInfo({
+      mimetype: contentType,
+      sizeBytes: data.byteLength,
+      ...(options.width !== undefined ? { width: options.width } : {}),
+      ...(options.height !== undefined ? { height: options.height } : {}),
+      ...(options.durationMs !== undefined ? { durationMs: options.durationMs } : {}),
+    });
+    let body = options.caption ?? options.filename;
+    let formatted: string | null = null;
+    const content: Record<string, unknown> = {
+      msgtype: options.msgtype ?? msgtypeForMime(contentType),
+      body,
+      filename: options.filename,
+      info,
+      ...(opts?.extra ?? {}),
+    };
+    if (file) content.file = file;
+    else content.url = upload.contentUri;
+
     const replyTo =
       reply || options.replyTo === true
         ? this.eventId || null
@@ -331,21 +380,25 @@ abstract class ContextBase<T extends UpdateType> implements BaseContext<T> {
           ? options.replyTo
           : null;
     if (replyTo) {
-      extra["m.relates_to"] = { "m.in_reply_to": { event_id: replyTo } };
+      content["m.relates_to"] = { "m.in_reply_to": { event_id: replyTo } };
     }
-    if (options.keyboard) {
-      extra[KEYBOARD_CONTENT_KEY] = tokenizeKeyboard(options.keyboard, target, minted);
+
+    if (opts?.keyboard && !opts.keyboard.isEmpty) {
+      const keyboardContent = tokenizeKeyboard(opts.keyboard, target, minted);
+      content[KEYBOARD_CONTENT_KEY] = keyboardContent;
+      if (opts.keyboardFallback !== false) {
+        const fallback = renderKeyboardFallback(keyboardContent);
+        if (fallback.text) body = body ? `${body}\n\n${fallback.text}` : fallback.text;
+        if (fallback.html) {
+          formatted = `<p>${body.split("\n\n")[0] ?? ""}</p>${fallback.html}`;
+          content.format = "org.matrix.custom.html";
+          content.formatted_body = formatted;
+        }
+        content.body = body;
+      }
     }
-    const eventId = await this.deps.client.sendFile(this.roomId, data, {
-      filename: options.filename,
-      ...(options.contentType !== undefined ? { contentType: options.contentType } : {}),
-      ...(options.msgtype !== undefined ? { msgtype: options.msgtype } : {}),
-      ...(options.caption !== undefined ? { caption: options.caption } : {}),
-      ...(options.width !== undefined ? { width: options.width } : {}),
-      ...(options.height !== undefined ? { height: options.height } : {}),
-      ...(options.durationMs !== undefined ? { durationMs: options.durationMs } : {}),
-      extra,
-    });
+
+    const eventId = await sendEventWithOutbox(target, "m.room.message", content);
     if (minted.length > 0) this.deps.callbacks.bindMessage(minted, eventId);
     return eventId;
   }
@@ -395,6 +448,10 @@ abstract class ContextBase<T extends UpdateType> implements BaseContext<T> {
         : (levels[field] ?? 50);
     const actual = this.powerLevelOf(this.deps.bot.selfId);
     if (actual < required) {
+      this.deps.bot.noteMetric({
+        name: "admin.denied",
+        labels: { action, roomId: this.roomId },
+      });
       throw new InsufficientPowerError(action, required, actual, this.roomId);
     }
     void asState;
@@ -620,31 +677,36 @@ class CallbackContextImpl extends ContextBase<"callback_query"> implements Callb
     this.answered = true;
     if (this.queryId) this.deps.callbacks.markAnswered(this.queryId);
 
-    if (options?.editText !== undefined || options?.editHtml !== undefined) {
-      if (this.messageEventId) {
-        const defaults = this.withDefaults() ?? {};
-        const formatted =
-          options.editHtml ??
-          (options.editText !== undefined
-            ? defaults.parseMode === "markdown"
-              ? markdownFormattedOrUndefined(options.editText)
-              : undefined
-            : undefined);
-        await this.deps.client.editMessage(this.roomId, this.messageEventId, {
-          body: options.editText ?? "",
-          ...(formatted ? { formattedBody: formatted } : {}),
-        });
-        if (options.keyboard === null) {
-          this.deps.callbacks.revokeForMessage(this.messageEventId);
-        }
+    const wantsEdit =
+      options?.editText !== undefined ||
+      options?.editHtml !== undefined ||
+      options?.keyboard !== undefined;
+    if (wantsEdit && this.messageEventId) {
+      let source: { text?: string; html?: string };
+      if (options?.editHtml !== undefined) {
+        source = { html: options.editHtml };
+      } else if (options?.editText !== undefined) {
+        source = { text: options.editText };
+      } else {
+        source = await readExistingMessageSource(this.sendTarget(), this.messageEventId);
       }
+      await editMessageWithOptions(
+        this.sendTarget(),
+        this.messageEventId,
+        source,
+        {
+          ...this.withDefaults(),
+          ...(options?.keyboard !== undefined ? { keyboard: options.keyboard } : {}),
+        },
+      );
     }
     if (options?.text) {
       const useToast =
         options.timeline !== true &&
-        (this.deps.bot.clientProfile === "aware" || this.hostCapabilities().toast);
+        (this.roomCapability() === "aware" || this.hostCapabilities().toast);
       if (useToast) {
-        await this.deps.client.sendEvent(this.roomId, CALLBACK_ANSWER_EVENT_TYPE, {
+        await sendEventWithOutbox(this.sendTarget(), CALLBACK_ANSWER_EVENT_TYPE, {
+          version: AIOMATRIX_SCHEMA.callback_answer,
           text: options.text,
           alert: options.alert === true,
           query_id: this.queryId,

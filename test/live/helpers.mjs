@@ -37,6 +37,7 @@ export async function createLiveBot(env, role, overrides = {}) {
     logger: overrides.logger ?? "warn",
     autojoin: overrides.autojoin !== false,
     syncTimeoutMs: overrides.syncTimeoutMs ?? 5_000,
+    storageLock: overrides.storageLock ?? true,
     ...overrides.botOptions,
   });
   return { bot, storagePath };
