@@ -15,7 +15,7 @@ concurrency:
   group: release-${{ github.event.inputs.tag || github.ref_name }}
   cancel-in-progress: false
 
-# No `uses: actions/*` — same bootstrap as CI (git + nodejs.org).
+# No actions/* downloads: same bootstrap as CI (git + nodejs.org).
 jobs:
   publish:
     name: publish to npm
@@ -68,11 +68,11 @@ jobs:
             echo "NPM_TOKEN secret is empty or missing. Set repo secret NPM_TOKEN with publish access to aiomatrix." >&2
             exit 1
           fi
-          cat > "$HOME/.npmrc" <<EOF
-//registry.npmjs.org/:_authToken=${NODE_AUTH_TOKEN}
-registry=https://registry.npmjs.org/
-always-auth=true
-EOF
+          {
+            printf '%s\n' "//registry.npmjs.org/:_authToken=${NODE_AUTH_TOKEN}"
+            printf '%s\n' "registry=https://registry.npmjs.org/"
+            printf '%s\n' "always-auth=true"
+          } > "$HOME/.npmrc"
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
 
